@@ -1,0 +1,41 @@
+# Stage 2 — Debug configuration (overrides stage2_training.yaml)
+phase1:
+  model_name: "facebook/bart-base"
+  learning_rate: 5.0e-5
+  batch_size: 2
+  num_epochs: 1
+  warmup_steps: 0
+  weight_decay: 0.01
+  fp16: false
+  bf16: false
+  predict_with_generate: true
+  generation_max_length: 128
+  save_steps: 2
+  eval_steps: 2
+  logging_steps: 1
+  max_steps: 4
+
+phase2:
+  learning_rate: 2.0e-5
+  batch_size: 2
+  num_epochs: 1
+  warmup_steps: 0
+  weight_decay: 0.01
+  fp16: false
+  bf16: false
+  predict_with_generate: true
+  generation_max_length: 128
+  save_steps: 2
+  eval_steps: 2
+  logging_steps: 1
+  max_steps: 4
+
+proxy:
+  learning_rate: 1.0e-3
+  batch_size: 4
+  num_epochs: 2
+  clip_model: "openai/clip-vit-large-patch14"
+  clip_embed_dim: 768
+  bart_hidden_size: 768
+  hidden_dim: 256
+  max_steps: 4

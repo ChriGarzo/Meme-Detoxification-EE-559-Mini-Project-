@@ -1,0 +1,251 @@
+"""
+Stage 2: BART-based rewriting with conditional control.
+
+Generates final rewrites for all examples using a fine-tuned BART model
+with support for multiple conditioning strategies.
+"""
+
+import argparse
+import json
+import logging
+import os
+import random
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+import numpy as np
+import torch
+import tqdm
+from codecarbon import EmissionsTracker
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from models.rewriter import MemeRewriter
+
+logger = logging.getLogger(__name__)
+
+
+def set_seed(seed: int = 42) -> None:
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def load_explanation_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
+    """Load examples from Stage 1 explanation JSONL file."""
+    examples = []
+    if not os.path.exists(jsonl_path):
+        logger.error(f"File not found: {jsonl_path}")
+        return examples
+
+    try:
+        with open(jsonl_path, "r") as f:
+            for line in f:
+                if line.strip():
+                    data = json.loads(line)
+                    examples.append(data)
+    except Exception as e:
+        logger.error(f"Error loading JSONL: {e}")
+
+    logger.info(f"Loaded {len(examples)} examples from {jsonl_path}")
+    return examples
+
+
+def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
+    """Append batch of examples to JSONL file."""
+    with open(output_path, "a") as f:
+        for item in data:
+            f.write(json.dumps(item) + "\n")
+
+
+def build_condition_prompt(
+    original_text: str,
+    explanation: Dict[str, str],
+    condition: str
+) -> str:
+    """
+    Build BART input prompt based on condition.
+
+    Conditions:
+    - 'full': use all explanation information
+    - 'target_only': focus on target group information
+    - 'attack_only': focus on hateful attack aspects
+    - 'none': minimal conditioning
+    """
+    explanation_str = explanation or {}
+
+    if condition == "full":
+        prompt = (
+            f"Remove hateful content from: {original_text} "
+            f"[VISUAL] {explanation_str.get('visual_content', '')} "
+            f"[HATE] {explanation_str.get('hateful_elements', '')} "
+            f"[TARGET] {explanation_str.get('target_group', '')}"
+        )
+    elif condition == "target_only":
+        prompt = (
+            f"Remove hateful content from: {original_text} "
+            f"[TARGET] {explanation_str.get('target_group', '')}"
+        )
+    elif condition == "attack_only":
+        prompt = (
+            f"Remove hateful content from: {original_text} "
+            f"[HATE] {explanation_str.get('hateful_elements', '')}"
+        )
+    else:  # 'none'
+        prompt = f"Remove hateful content from: {original_text}"
+
+    return prompt
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Stage 2: Generate BART-based rewrites")
+    parser.add_argument("--stage1_outputs", type=str, required=True, help="Path to Stage 1 explanation JSONL")
+    parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to BART checkpoint")
+    parser.add_argument(
+        "--condition",
+        type=str,
+        choices=["full", "target_only", "attack_only", "none"],
+        default="full",
+        help="Conditioning strategy"
+    )
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
+    parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for inference")
+    parser.add_argument("--num_beams", type=int, default=5, help="Number of beams for beam search")
+    parser.add_argument("--debug", action="store_true", help="Debug mode: process max 16 examples")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    # Setup
+    set_seed(args.seed)
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.environ["HF_HOME"] = args.hf_cache
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(os.path.join(args.output_dir, "stage2.log")),
+            logging.StreamHandler()
+        ]
+    )
+
+    logger.info(f"Starting Stage 2 with condition={args.condition}, debug={args.debug}")
+    logger.info(f"Arguments: {vars(args)}")
+
+    # Load Stage 1 outputs
+    examples = load_explanation_jsonl(args.stage1_outputs)
+    if args.debug:
+        examples = examples[:16]
+    logger.info(f"Processing {len(examples)} examples")
+
+    # Initialize BART model
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Using device: {device}")
+
+    if args.debug:
+        # Use bart-base for debug mode
+        model_name = "facebook/bart-base"
+        logger.info("Using bart-base for debug mode")
+    else:
+        model_name = args.checkpoint_path
+
+    try:
+        rewriter = MemeRewriter(
+            model_name=model_name,
+            cache_dir=args.hf_cache,
+            device=device,
+            num_beams=args.num_beams
+        )
+    except Exception as e:
+        logger.error(f"Failed to load BART model from {model_name}: {e}")
+        logger.info("Attempting fallback to facebook/bart-base")
+        rewriter = MemeRewriter(
+            model_name="facebook/bart-base",
+            cache_dir=args.hf_cache,
+            device=device,
+            num_beams=args.num_beams
+        )
+
+    # Prepare output path
+    output_path = os.path.join(args.output_dir, f"stage2_rewrites_{args.condition}.jsonl")
+
+    # Process examples
+    batch_texts = []
+    batch_prompts = []
+    batch_original = []
+    batch_explanations = []
+    batch_records = []
+    total_processed = 0
+
+    tracker = EmissionsTracker(log_level="warning")
+    tracker.start()
+
+    try:
+        with tqdm.tqdm(total=len(examples), desc="Generating rewrites") as pbar:
+            for idx, example in enumerate(examples):
+                example_id = example.get("id")
+                image_path = example.get("image_path")
+                original_text = example.get("original_text", "")
+                explanation = example.get("explanation", {})
+
+                # Build conditioning prompt
+                prompt = build_condition_prompt(original_text, explanation, args.condition)
+                batch_texts.append(prompt)
+                batch_prompts.append(prompt)
+                batch_original.append(original_text)
+                batch_explanations.append(explanation)
+
+                batch_records.append({
+                    "id": example_id,
+                    "image_path": image_path,
+                    "original_text": original_text,
+                    "explanation": explanation,
+                    "condition": args.condition
+                })
+
+                # Process batch
+                if len(batch_texts) >= args.batch_size or (idx == len(examples) - 1 and batch_texts):
+                    try:
+                        rewrites = rewriter.rewrite_batch(batch_prompts, max_length=128)
+
+                        for i, rewrite in enumerate(rewrites):
+                            batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = rewrite
+
+                    except Exception as e:
+                        logger.error(f"Error generating rewrites: {e}")
+                        for i in range(len(batch_texts)):
+                            batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = ""
+
+                    # Write batch
+                    write_jsonl_batch(batch_records, output_path)
+                    total_processed += len(batch_records)
+                    logger.info(f"Processed batch of {len(batch_records)} examples")
+
+                    batch_texts = []
+                    batch_prompts = []
+                    batch_original = []
+                    batch_explanations = []
+                    batch_records = []
+
+                pbar.update(1)
+
+        logger.info(f"\n=== Stage 2 Summary ===")
+        logger.info(f"Total examples processed: {total_processed}")
+        logger.info(f"Condition: {args.condition}")
+        logger.info(f"Batch size: {args.batch_size}")
+        logger.info(f"Num beams: {args.num_beams}")
+        logger.info(f"Output JSONL: {output_path}")
+
+    finally:
+        emissions = tracker.stop()
+        logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
+
+
+if __name__ == "__main__":
+    main()

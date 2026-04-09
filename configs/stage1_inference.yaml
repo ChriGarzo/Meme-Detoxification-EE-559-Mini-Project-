@@ -1,0 +1,33 @@
+# Stage 1 — LLaVA Explanation + Pseudo-rewrite generation
+model_name: "llava-hf/llava-v1.6-mistral-7b-hf"
+load_in_4bit: true
+batch_size: 4
+max_new_tokens: 256
+temperature: 0.1
+do_sample: false
+
+# Quality filter thresholds for pseudo-rewrites
+sta_threshold: 0.6
+bertscore_threshold: 0.4
+
+# Save progress every N batches
+save_interval: 100
+
+# Valid values for structured explanation
+valid_target_groups:
+  - race_ethnicity
+  - nationality
+  - religion
+  - gender
+  - sexual_orientation
+  - disability
+  - other
+
+valid_attack_types:
+  - contempt
+  - mocking
+  - inferiority
+  - slurs
+  - exclusion
+  - dehumanizing
+  - inciting_violence

@@ -1,0 +1,46 @@
+# Stage 2 — BART Rewriter Training
+
+# Phase 1: ParaDetox warm-up
+phase1:
+  model_name: "facebook/bart-large"
+  learning_rate: 5.0e-5
+  batch_size: 16
+  num_epochs: 2
+  warmup_steps: 500
+  weight_decay: 0.01
+  fp16: true
+  predict_with_generate: true
+  generation_max_length: 128
+  save_steps: 200
+  eval_steps: 200
+  logging_steps: 50
+  bertscore_filter_threshold: 0.5
+
+# Phase 2: Meme conditioning fine-tune
+phase2:
+  learning_rate: 2.0e-5
+  batch_size: 8
+  num_epochs: 3
+  warmup_steps: 100
+  weight_decay: 0.01
+  fp16: true
+  predict_with_generate: true
+  generation_max_length: 128
+  save_steps: 200
+  eval_steps: 200
+  logging_steps: 50
+  conditions:
+    - full
+    - target_only
+    - attack_only
+    - none
+
+# Proxy network training
+proxy:
+  learning_rate: 1.0e-3
+  batch_size: 64
+  num_epochs: 20
+  clip_model: "openai/clip-vit-large-patch14"
+  clip_embed_dim: 768
+  bart_hidden_size: 1024
+  hidden_dim: 1024
