@@ -57,20 +57,29 @@ def make_debug_dataset() -> List[Dict]:
 
 def load_stage1_outputs(stage1_dir: str) -> List[Dict]:
     """
-    Load all Stage 1 JSONL outputs from directory.
+    Load all Stage 1 pseudo-rewrite JSONL outputs from a tree of per-dataset
+    sub-directories.
 
-    Expects files matching: stage1_harmeme.jsonl, stage1_mami.jsonl, stage1_mmhs150k.jsonl
+    run_stage1.py writes files named:
+        {stage1_dir}/{dataset}/{dataset}_pseudo_rewrites.jsonl
 
-    Each line should contain:
+    Each line contains:
     {
         "id": "...",
+        "image_path": "...",
         "original_text": "...",
-        "target_group": "...",
-        "attack_type": "...",
-        "explanation": "...",
+        "explanation": {
+            "target_group": "...",
+            "attack_type": "...",
+            "implicit_meaning": "..."
+        },
         "pseudo_rewrite": "...",
-        "bert_score": 0.xx
+        "sta_score": 0.xx,
+        "bertscore": 0.xx       ← note: "bertscore" not "bert_score"
     }
+
+    This function normalises the field names so downstream code uses
+    a consistent schema.
     """
     stage1_dir = Path(stage1_dir)
     if not stage1_dir.is_dir():
@@ -78,24 +87,51 @@ def load_stage1_outputs(stage1_dir: str) -> List[Dict]:
         return []
 
     examples = []
-    jsonl_files = list(stage1_dir.glob("stage1_*.jsonl"))
+    # Collect *_pseudo_rewrites.jsonl from any depth
+    jsonl_files = sorted(stage1_dir.rglob("*_pseudo_rewrites.jsonl"))
 
     if not jsonl_files:
-        logger.warning(f"No stage1_*.jsonl files found in {stage1_dir}")
+        logger.warning(
+            f"No *_pseudo_rewrites.jsonl files found under {stage1_dir}. "
+            "Make sure Stage 1 has completed for all datasets."
+        )
         return []
 
-    for jsonl_path in tqdm(jsonl_files, desc="Loading Stage 1 outputs"):
-        logger.info(f"Loading {jsonl_path.name}")
+    for jsonl_path in tqdm(jsonl_files, desc="Loading Stage 1 pseudo-rewrites"):
+        logger.info(f"Loading {jsonl_path}")
+        # Derive dataset name from the file stem: "{dataset}_pseudo_rewrites"
+        dataset_name = jsonl_path.stem.replace("_pseudo_rewrites", "")
+
         with open(jsonl_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    example = json.loads(line.strip())
-                    examples.append(example)
+                    raw = json.loads(line)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse line {line_num} in {jsonl_path.name}: {e}")
+                    logger.warning(
+                        f"Failed to parse line {line_num} in {jsonl_path.name}: {e}"
+                    )
                     continue
 
-    logger.info(f"Loaded {len(examples)} examples from Stage 1")
+                # Normalise schema: flatten explanation sub-fields to top level
+                expl = raw.get("explanation") or {}
+                example = {
+                    "id": raw.get("id", ""),
+                    "image_path": raw.get("image_path", ""),
+                    "original_text": raw.get("original_text", ""),
+                    "target_group": expl.get("target_group") or "null",
+                    "attack_type": expl.get("attack_type") or "null",
+                    "explanation": expl.get("implicit_meaning") or "",
+                    "pseudo_rewrite": raw.get("pseudo_rewrite", ""),
+                    # Accept both "bertscore" (stage1 output) and "bert_score"
+                    "bert_score": raw.get("bertscore", raw.get("bert_score", 0.0)),
+                    "dataset": raw.get("dataset", dataset_name),
+                }
+                examples.append(example)
+
+    logger.info(f"Loaded {len(examples)} pseudo-rewrite examples from Stage 1")
     return examples
 
 
@@ -110,19 +146,33 @@ def filter_by_bert_score(examples: List[Dict], min_score: float = 0.4) -> List[D
     return filtered
 
 
-def create_input_format(target_group: str, attack_type: str, meme_text: str) -> str:
+def create_input_format(
+    target_group: str,
+    attack_type: str,
+    implicit_meaning: str,
+    meme_text: str
+) -> str:
     """
-    Create prefixed input format: [T: ...] [A: ...] [M: ...] </s> {text}
+    Create prefixed BART encoder input (full conditioning format):
+
+        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] </s> <meme_text>
+
+    Null fields are rendered as the literal string "null".
+    This matches MemeRewriter.format_input(condition="full") in models/rewriter.py.
 
     Args:
-        target_group: Target group label (e.g., "race_ethnicity")
-        attack_type: Attack type label (e.g., "contempt")
-        meme_text: Original meme text
+        target_group:     e.g. "race_ethnicity" or "null"
+        attack_type:      e.g. "contempt" or "null"
+        implicit_meaning: one-sentence implicit meaning from LLaVA, or ""
+        meme_text:        original meme text
 
     Returns:
-        Formatted input string
+        Formatted input string ready for BART tokenisation
     """
-    return f"[T: {target_group}] [A: {attack_type}] [M: {meme_text}] </s>"
+    tg = target_group or "null"
+    at = attack_type or "null"
+    im = implicit_meaning or "null"
+    return f"[T: {tg}] [A: {at}] [M: {im}] </s> {meme_text}"
 
 
 def build_training_data(examples: List[Dict]) -> List[Dict]:
@@ -135,8 +185,9 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
 
     for example in examples:
         original_text = example.get("original_text", "")
-        target_group = example.get("target_group", "unknown")
-        attack_type = example.get("attack_type", "unknown")
+        target_group = example.get("target_group") or "null"
+        attack_type = example.get("attack_type") or "null"
+        implicit_meaning = example.get("explanation", "") or "null"
         pseudo_rewrite = example.get("pseudo_rewrite", "")
         dataset = example.get("dataset", "unknown")
         example_id = example.get("id", "")
@@ -144,14 +195,20 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
         if not original_text or not pseudo_rewrite:
             logger.warning(f"Skipping example {example_id}: missing text or rewrite")
             continue
-
-        input_text = create_input_format(target_group, attack_type, original_text)
+        input_text = create_input_format(target_group, attack_type, implicit_meaning, original_text)
         condition = f"{target_group}_{attack_type}"
 
         training_record = {
             "id": example_id,
+            # Pre-formatted full-condition input (used as-is for condition=full)
             "input_text": input_text,
             "target_text": pseudo_rewrite,
+            # Raw fields stored separately so train_stage2_phase2.py can
+            # reformat the input for conditions other than 'full'
+            "original_text": original_text,
+            "target_group": target_group,
+            "attack_type": attack_type,
+            "implicit_meaning": implicit_meaning,
             "condition": condition,
             "dataset": dataset
         }

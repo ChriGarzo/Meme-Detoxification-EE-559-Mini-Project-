@@ -79,7 +79,8 @@ class ExplanationProxyTrainer:
     def __init__(
         self,
         rewriter: MemeRewriter,
-        clip_model_name: str = "openai/clip-vit-base-patch32",
+        clip_model_name: str = "openai/clip-vit-large-patch14",
+        cache_dir: Optional[str] = None,
         device: Optional[str] = None,
     ):
         """
@@ -92,14 +93,17 @@ class ExplanationProxyTrainer:
         """
         self.rewriter = rewriter
         self.clip_model_name = clip_model_name
+        self.cache_dir = cache_dir
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load CLIP
+        # Load CLIP (must use clip-vit-large-patch14: 768-dim embeds → 1536 concat)
         logger.info(f"Loading CLIP model {clip_model_name}...")
         self.clip_model = CLIPModel.from_pretrained(
-            clip_model_name
+            clip_model_name, cache_dir=cache_dir
         ).to(self.device)
-        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+        self.clip_processor = CLIPProcessor.from_pretrained(
+            clip_model_name, cache_dir=cache_dir
+        )
         self.clip_model.eval()
 
         # Initialize proxy network
@@ -151,13 +155,14 @@ class ExplanationProxyTrainer:
 
         with torch.no_grad():
             outputs = self.clip_model(**inputs)
-            image_embeds = outputs.image_embeds  # [N, 512]
-            text_embeds = outputs.text_embeds  # [N, 512]
+            # clip-vit-large-patch14 → 768-dim each → 1536 concatenated
+            image_embeds = outputs.image_embeds  # [N, 768]
+            text_embeds = outputs.text_embeds    # [N, 768]
 
-        # Concatenate
+        # Concatenate → [N, 1536]  (matches ExplanationProxy input dim)
         combined = torch.cat(
             [image_embeds, text_embeds], dim=1
-        )  # [N, 1024]
+        )  # [N, 1536]
 
         return combined
 

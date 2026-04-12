@@ -93,74 +93,113 @@ python scripts/download_paradetox.py
 ## Cluster Workflow
 
 ### Setup Information
-- **User:** garzone
-- **Group:** 31
+- **Group:** 31 (shared scratch PVC: `course-ee-559-scratch-g31`)
+- All group members use the **same `/scratch/` storage** — datasets only need to be
+  downloaded and preprocessed **once** by any one group member.
+- Code lives in each member's personal `/home/<username>/` directory.
 
-### Step 1: Docker Build & Registry Push
+### Step 1: Docker Build & Registry Push (each member once)
 
-Build Docker image locally:
+Each member must push their own Docker image to the EPFL registry under their username:
 ```bash
-docker build -t hmr:v0.1 .
-docker tag hmr:v0.1 registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1
-docker push registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1
+# Run locally on your machine
+docker build -t hmr:v0.1 docker/
+docker tag hmr:v0.1 registry.rcp.epfl.ch/ee-559-${USER}/hmr:v0.1
+docker push registry.rcp.epfl.ch/ee-559-${USER}/hmr:v0.1
 ```
 
 ### Step 2: SSH & RunAI Setup
 
-Connect to jumphost:
 ```bash
-ssh jumphost.rcp.epfl.ch
-```
-
-Login and configure RunAI:
-```bash
+ssh <your_username>@jumphost.rcp.epfl.ch
 runai login
 runai config project course-ee-559-${USER}
 ```
 
-### Step 3: Clone Repository
+### Step 3: Get your UID
+
+All scripts need your numeric Unix UID:
+```bash
+id -u    # prints e.g. 123456
+```
+
+### Step 4: Clone Repository (each member)
 
 ```bash
-cd /home/garzone/
+cd /home/${USER}/
 git clone <repo_url>
 cd hateful_meme_rewriting
 ```
 
-### Step 4: Submit Jobs (Sequential)
+### Step 5: Submit Jobs (Sequential)
 
-Submit the following jobs in order, waiting for completion of each stage:
+All scripts accept your UID as the **first argument**. Your Unix username (`$USER`)
+is picked up automatically — you never need to edit the scripts.
 
-**Stage 0: Filter Memes** (run per dataset)
+**Stage 0: Filter Memes** (run once per dataset; shared output on /scratch/)
 ```bash
-bash scripts/runai_stage0_filter.sh
+bash scripts/runai_stage0_filter.sh <UID> harmeme
+bash scripts/runai_stage0_filter.sh <UID> mami
+bash scripts/runai_stage0_filter.sh <UID> mmhs150k
+```
+After each run, visual grids of **kept** and **discarded** images are saved to
+`/scratch/hmr_data/<dataset>/filter_examples/` so you can verify the filter.
+
+**Stage 1: Generate LLaVA Explanations + Pseudo-rewrites** (all datasets in parallel)
+```bash
+bash scripts/runai_stage1_explain.sh <UID>
 ```
 
-**Stage 1: Generate Explanations**
+**Build Stage 2 Dataset** (wait for all Stage 1 jobs to finish)
 ```bash
-bash scripts/runai_stage1_explain.sh
+bash scripts/runai_build_stage2_dataset.sh <UID>
 ```
 
 **Stage 2 Phase 1: ParaDetox Pretraining**
 ```bash
-bash scripts/runai_stage2_phase1.sh
+bash scripts/runai_stage2_phase1.sh <UID>
 ```
 
-**Stage 2 Phase 2: Meme Fine-tuning**
+**Stage 2 Phase 2: Meme Fine-tuning** (4 conditions in parallel)
 ```bash
-bash scripts/runai_stage2_phase2.sh
+bash scripts/runai_stage2_phase2.sh <UID>
 ```
+Conditions: `full` | `target_only` | `attack_only` | `none`
 
 **Stage 4: Train Proxy Network**
 ```bash
-bash scripts/runai_train_proxy.sh
+bash scripts/runai_train_proxy.sh <UID>
 ```
 
 **Stage 3: Evaluation**
 ```bash
-bash scripts/runai_evaluate.sh
+bash scripts/runai_evaluate.sh <UID>
 ```
 
-**Note:** Large files are stored on `/scratch/`, while code resides on `/home/`.
+### Storage Layout on `/scratch/` (shared by all group members)
+
+```
+/scratch/
+├── hf_cache/                          ← HuggingFace model cache (downloaded once)
+├── hmr_data/
+│   ├── harmeme/images/                ← raw images
+│   ├── harmeme/manifest.csv           ← Stage 0 output
+│   ├── harmeme/filter_examples/       ← kept_examples.png + discarded_examples.png
+│   ├── mami/ ...
+│   └── mmhs150k/ ...
+├── hmr_stage1_output/
+│   ├── harmeme/{harmeme}_explanations.jsonl
+│   ├── harmeme/{harmeme}_pseudo_rewrites.jsonl
+│   ├── mami/ ...
+│   └── mmhs150k/ ...
+├── hmr_stage2_dataset/
+│   ├── train.jsonl
+│   └── val.jsonl
+├── hmr_stage2_phase1_checkpoint/
+├── hmr_stage2_phase2_{full,target_only,attack_only,none}_checkpoint/
+├── hmr_proxy_checkpoint/
+└── hmr_eval_results/
+```
 
 ## Evaluation Results
 

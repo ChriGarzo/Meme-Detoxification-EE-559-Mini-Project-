@@ -1,16 +1,45 @@
 #!/usr/bin/env bash
 set -e
 
-# === Configuration (edit these) ===
-USERNAME="garzone"
-UID_NUM="<YOUR_UID>"      # Get with: ssh garzone@jumphost.rcp.epfl.ch then: id
+# =============================================================================
+# Stage 1: LLaVA explanation generation + pseudo-rewrites (GPU A100-40G)
+#
+# Usage: bash scripts/runai_stage1_explain.sh <UID_NUMBER>
+#
+#   UID_NUMBER  Your numeric Unix UID. Get it with: id -u
+#
+# Example:
+#   bash scripts/runai_stage1_explain.sh 123456
+#
+# Note: USERNAME is taken automatically from $USER.
+#       Submits one job per dataset (harmeme, mami, mmhs150k).
+#       Assumes Stage 0 has already been run for all datasets.
+# =============================================================================
+
+# --- Validate args ---
+if [ -z "$1" ]; then
+    echo "ERROR: Missing UID_NUMBER argument."
+    echo "Usage: bash $0 <UID_NUMBER>"
+    echo "  Get your UID with: id -u"
+    exit 1
+fi
+
+UID_NUM="$1"
+
+# --- Configuration (do NOT edit these) ---
+USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
 
-# Stage 1: LLaVA inference (GPU A100-40G)
-# Loops over all datasets in DATASETS array
+# Datasets to process (must match Stage 0 runs)
+DATASETS=("harmeme" "mami" "mmhs150k")
 
-DATASETS=("harmeme" "reddit" "twitter" "other")  # Adjust as needed
+echo "=== Stage 1: LLaVA Explanation Generation ==="
+echo "  User:     ${USERNAME} (UID: ${UID_NUM})"
+echo "  Group:    ${GROUP_NUM}"
+echo "  Datasets: ${DATASETS[*]}"
+echo "  Image:    ${IMAGE}"
+echo ""
 
 for DATASET in "${DATASETS[@]}"; do
     echo "Submitting Stage 1 for dataset: ${DATASET}"
@@ -34,4 +63,5 @@ for DATASET in "${DATASETS[@]}"; do
             --hf_cache /scratch/hf_cache
 done
 
-echo "All Stage 1 jobs submitted."
+echo ""
+echo "All Stage 1 jobs submitted. Wait for completion before running build_stage2_dataset."

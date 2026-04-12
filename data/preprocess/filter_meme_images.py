@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -20,7 +21,7 @@ from typing import Optional, Tuple
 import easyocr
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
@@ -234,6 +235,95 @@ class MemeImageFilter:
         return results, stats
 
 
+def save_example_grid(
+    results: list,
+    output_dir: str,
+    n_examples: int = 16,
+    thumb_size: int = 224,
+    dataset: str = ""
+):
+    """
+    Save two image grids — one of kept memes and one of discarded memes — so you
+    can visually verify the OCR+CLIP filter is working correctly.
+
+    Args:
+        results:    List of dicts from filter_dataset / filter_image
+        output_dir: Directory to write the PNG files
+        n_examples: How many examples to show per grid (default 16 → 4×4 grid)
+        thumb_size: Thumbnail size in pixels (square)
+        dataset:    Dataset name used in filenames
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    kept = [r for r in results if r["kept"]]
+    discarded = [r for r in results if not r["kept"]]
+
+    import random as _random
+    _random.seed(0)
+
+    def _make_grid(records: list, title: str, out_path: Path):
+        """Lay out up to n_examples images in a square grid with captions."""
+        sample = _random.sample(records, min(n_examples, len(records)))
+        if not sample:
+            logger.info(f"No examples to save for: {title}")
+            return
+
+        cols = math.ceil(math.sqrt(len(sample)))
+        rows = math.ceil(len(sample) / cols)
+
+        label_height = 36          # pixels for caption below each thumbnail
+        cell_h = thumb_size + label_height
+        header_h = 48              # top banner with overall title
+
+        grid_w = cols * thumb_size
+        grid_h = header_h + rows * cell_h
+
+        grid = Image.new("RGB", (grid_w, grid_h), color=(240, 240, 240))
+        draw = ImageDraw.Draw(grid)
+
+        # Header banner
+        draw.rectangle([0, 0, grid_w, header_h], fill=(30, 30, 30))
+        draw.text((8, 10), title, fill=(255, 255, 255))
+
+        for idx, record in enumerate(sample):
+            col = idx % cols
+            row = idx // cols
+            x = col * thumb_size
+            y = header_h + row * cell_h
+
+            # Load and thumbnail the image
+            img_path = record["image_path"]
+            try:
+                img = Image.open(img_path).convert("RGB")
+                img.thumbnail((thumb_size, thumb_size), Image.LANCZOS)
+                # Paste centered on a white cell
+                cell = Image.new("RGB", (thumb_size, thumb_size), (255, 255, 255))
+                offset = ((thumb_size - img.width) // 2, (thumb_size - img.height) // 2)
+                cell.paste(img, offset)
+                grid.paste(cell, (x, y))
+            except Exception as e:
+                logger.warning(f"Could not load image {img_path}: {e}")
+                draw.rectangle([x, y, x + thumb_size, y + thumb_size], fill=(200, 200, 200))
+
+            # Caption: OCR count + CLIP scores
+            caption_y = y + thumb_size + 2
+            ocr_n = record.get("ocr_char_count", 0)
+            ms = record.get("clip_meme_score", 0.0)
+            ss = record.get("clip_screenshot_score", 0.0)
+            caption = f"OCR:{ocr_n}  meme:{ms:.2f} scr:{ss:.2f}"
+            draw.text((x + 2, caption_y), caption, fill=(50, 50, 50))
+
+        grid.save(out_path)
+        logger.info(f"Saved example grid ({len(sample)} images) → {out_path}")
+
+    prefix = f"{dataset}_" if dataset else ""
+    _make_grid(kept,     f"KEPT ({len(kept)} total) — {dataset}",
+               output_dir / f"{prefix}kept_examples.png")
+    _make_grid(discarded, f"DISCARDED ({len(discarded)} total) — {dataset}",
+               output_dir / f"{prefix}discarded_examples.png")
+
+
 def print_summary_table(all_stats: dict):
     """Print summary statistics table."""
     print("\n" + "=" * 80)
@@ -290,6 +380,23 @@ def main():
         default=None,
         help="HuggingFace cache directory (default: ~/.cache/huggingface)"
     )
+    parser.add_argument(
+        "--save_examples",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "If provided, save two image grids (kept / discarded) to this directory "
+            "after filtering, so you can visually verify the filter is working correctly. "
+            "Example: --save_examples /scratch/hmr_data/harmeme/filter_examples"
+        )
+    )
+    parser.add_argument(
+        "--n_examples",
+        type=int,
+        default=16,
+        help="Number of example images per grid (default: 16, i.e. 4×4)"
+    )
 
     args = parser.parse_args()
 
@@ -337,6 +444,19 @@ def main():
 
     # Print summary
     print_summary_table({args.dataset: stats})
+
+    # Save visual examples of kept vs discarded images
+    if args.save_examples:
+        logger.info(f"Saving example grids to {args.save_examples} ...")
+        save_example_grid(
+            results=results,
+            output_dir=args.save_examples,
+            n_examples=args.n_examples,
+            dataset=args.dataset
+        )
+        print(f"\nExample grids saved to: {args.save_examples}/")
+        print(f"  {args.dataset}_kept_examples.png     — images that PASSED the filter")
+        print(f"  {args.dataset}_discarded_examples.png — images that FAILED the filter")
 
     return 0
 

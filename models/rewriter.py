@@ -21,7 +21,9 @@ class MemeRewriter:
         self,
         model_name: str = "facebook/bart-large",
         checkpoint_path: Optional[str] = None,
+        cache_dir: Optional[str] = None,
         device: Optional[str] = None,
+        num_beams: int = 4,
         debug: bool = False,
     ):
         """
@@ -39,7 +41,9 @@ class MemeRewriter:
 
         self.model_name = model_name
         self.checkpoint_path = checkpoint_path
+        self.cache_dir = cache_dir
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.num_beams = num_beams
         self.tokenizer = None
         self.model = None
         self.hidden_size = None
@@ -49,9 +53,11 @@ class MemeRewriter:
         """Load the BART model and tokenizer."""
         logger.info(f"Loading model {self.model_name}...")
 
-        self.tokenizer = BartTokenizer.from_pretrained(self.model_name)
+        self.tokenizer = BartTokenizer.from_pretrained(
+            self.model_name, cache_dir=self.cache_dir
+        )
         self.model = BartForConditionalGeneration.from_pretrained(
-            self.model_name
+            self.model_name, cache_dir=self.cache_dir
         ).to(self.device)
 
         # Determine hidden size
@@ -283,6 +289,52 @@ class MemeRewriter:
             hidden_state = last_hidden_state.mean(dim=1)  # [1, hidden_size]
 
         return hidden_state
+
+    def generate_from_formatted(
+        self,
+        formatted_inputs: List[str],
+        max_length: int = 128,
+    ) -> List[str]:
+        """
+        Generate rewrites from pre-formatted input strings.
+
+        Use this when the caller has already built the full BART encoder string
+        (e.g. '[T: ...] [A: ...] [M: ...] </s> {text}') and does NOT want
+        format_input() to be applied again.
+
+        Args:
+            formatted_inputs: List of already-formatted strings
+            max_length: Maximum generation length
+
+        Returns:
+            List of generated strings
+        """
+        if self.model is None:
+            self.load_model()
+
+        results = []
+        for text in formatted_inputs:
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+            ).to(self.device)
+
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_length=max_length,
+                    num_beams=self.num_beams,
+                    early_stopping=True,
+                    do_sample=False,
+                )
+
+            decoded = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            results.append(decoded)
+
+        return results
 
     def decode_from_hidden_state(
         self,

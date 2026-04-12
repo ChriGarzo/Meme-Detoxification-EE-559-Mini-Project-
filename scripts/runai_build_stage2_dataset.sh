@@ -2,17 +2,18 @@
 set -e
 
 # =============================================================================
-# Stage 4: Train explanation proxy network (GPU A100-40G)
+# Build Stage 2 training dataset from Stage 1 outputs (no GPU needed)
 #
-# Usage: bash scripts/runai_train_proxy.sh <UID_NUMBER>
+# Usage: bash scripts/runai_build_stage2_dataset.sh <UID_NUMBER>
 #
 #   UID_NUMBER  Your numeric Unix UID. Get it with: id -u
 #
 # Example:
-#   bash scripts/runai_train_proxy.sh 123456
+#   bash scripts/runai_build_stage2_dataset.sh 123456
 #
-# Note: Run this AFTER Stage 2 Phase 2 (full condition) has completed.
-#       Trains a lightweight CLIP→BART-hidden-state MLP to bypass LLaVA at deployment.
+# Note: Run this AFTER all Stage 1 jobs have completed.
+#       Combines all per-dataset stage1 outputs into a single train/val split
+#       stored at /scratch/hmr_stage2_dataset/ (shared across the group).
 # =============================================================================
 
 # --- Validate args ---
@@ -30,32 +31,24 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
 
-echo "=== Stage 4: Proxy Network Training ==="
+echo "=== Build Stage 2 Dataset ==="
 echo "  User:  ${USERNAME} (UID: ${UID_NUM})"
 echo "  Group: ${GROUP_NUM}"
 echo "  Image: ${IMAGE}"
 echo ""
 
-runai submit hmr-train-proxy \
+runai submit hmr-build-stage2-dataset \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
-    --node-pools a100-40g \
-    --gpu 1 \
-    --cpu-request 8 \
-    --memory-request 40Gi \
+    --cpu-request 4 \
+    --memory-request 16Gi \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
     --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
-    --command -- python3 /home/${USERNAME}/hateful_meme_rewriting/training/train_proxy.py \
-        --stage1_output_dir /scratch/hmr_stage1_output \
-        --stage2_dataset_dir /scratch/hmr_stage2_dataset \
-        --bart_checkpoint_dir /scratch/hmr_stage2_phase2_full_checkpoint \
-        --output_dir /scratch/hmr_proxy_checkpoint \
-        --hf_cache /scratch/hf_cache \
-        --num_train_epochs 20 \
-        --batch_size 64 \
-        --learning_rate 1e-3 \
-        --seed 42
+    --command -- python3 /home/${USERNAME}/hateful_meme_rewriting/data/preprocess/build_stage2_dataset.py \
+        --stage1_dir /scratch/hmr_stage1_output \
+        --output_dir /scratch/hmr_stage2_dataset \
+        --hf_cache /scratch/hf_cache
 
-echo "Proxy network training job submitted."
+echo "Build Stage 2 dataset job submitted."

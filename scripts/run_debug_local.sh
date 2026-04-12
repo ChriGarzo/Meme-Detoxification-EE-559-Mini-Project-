@@ -10,13 +10,21 @@ export HF_HOME="./.cache/huggingface"
 export TOKENIZERS_PARALLELISM=false
 
 echo "=== [DEBUG] Step 1: Filter images (skipped in debug) ==="
-python3 data/preprocess/filter_meme_images.py --dataset harmeme --debug
+python3 data/preprocess/filter_meme_images.py \
+    --dataset harmeme \
+    --images_dir outputs/debug_run/images \
+    --output_manifest outputs/debug_run/harmeme_manifest.csv \
+    --save_examples outputs/debug_run/filter_examples \
+    --debug
 
 echo "=== [DEBUG] Step 2: Run Stage 1 — LLaVA explain + pseudo-rewrite ==="
 python3 inference/run_stage1.py --dataset harmeme --debug
 
 echo "=== [DEBUG] Step 3: Build Stage 2 dataset ==="
-python3 data/preprocess/build_stage2_dataset.py --debug
+python3 data/preprocess/build_stage2_dataset.py \
+    --stage1_dir outputs/debug_run/stage1 \
+    --output_dir outputs/debug_run/stage2_dataset \
+    --debug
 
 echo "=== [DEBUG] Step 4: Train Stage 2 Phase 1 (ParaDetox warm-up) ==="
 python3 training/train_stage2_phase1.py --debug

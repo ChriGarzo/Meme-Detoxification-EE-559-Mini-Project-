@@ -25,7 +25,6 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.explainer import MemeExplainer
 from utils.bertscore_utils import compute_bertscore_batch
-from utils.pseudo_rewrite import generate_pseudo_rewrites
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 1: Generate explanations and pseudo-rewrites")
     parser.add_argument("--dataset", type=str, required=True, help="Dataset name (e.g., 'training')")
     parser.add_argument("--images_dir", type=str, required=True, help="Path to images directory")
-    parser.add_argument("--manifest", type=str, required=True, help="Path to manifest CSV from Stage 0")
+    parser.add_argument("--manifest_path", type=str, required=True, help="Path to manifest CSV from Stage 0 (output of filter_meme_images.py)")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL files")
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
     parser.add_argument("--load_in_4bit", action="store_true", help="Load LLaVA in 4-bit quantization")
@@ -122,7 +121,7 @@ def main():
     logger.info(f"Arguments: {vars(args)}")
 
     # Load manifest
-    manifest_df = pd.read_csv(args.manifest)
+    manifest_df = pd.read_csv(args.manifest_path)
     if args.debug:
         manifest_df = manifest_df.head(16)
     logger.info(f"Loaded manifest with {len(manifest_df)} examples")
@@ -134,7 +133,8 @@ def main():
     explainer = MemeExplainer(
         load_in_4bit=args.load_in_4bit,
         cache_dir=args.hf_cache,
-        device=device
+        device=device,
+        debug=args.debug,
     )
 
     sta_model, sta_tokenizer = load_sta_model(device=device)
@@ -198,10 +198,18 @@ def main():
                 explanations_batch.append(explanation_record)
                 processed_explanation_ids.add(example_id)
 
-                # Generate pseudo-rewrites if hateful
+                # Generate pseudo-rewrite via LLaVA if the meme is hateful
                 if is_hateful and example_id not in processed_rewrite_ids:
                     total_pseudo_rewrites += 1
-                    pseudo_rewrites = generate_pseudo_rewrites(original_text, explanation)
+                    try:
+                        raw_rewrite = explainer.generate_rewrite(
+                            image_path, original_text, explanation
+                        )
+                    except Exception as e:
+                        logger.warning(f"Rewrite generation failed for {example_id}: {e}")
+                        raw_rewrite = None
+
+                    pseudo_rewrites = [raw_rewrite] if raw_rewrite else []
 
                     # Filter by quality
                     for rewrite in pseudo_rewrites:

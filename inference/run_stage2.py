@@ -68,49 +68,53 @@ def build_condition_prompt(
     condition: str
 ) -> str:
     """
-    Build BART input prompt based on condition.
+    Build BART encoder input string based on ablation condition.
 
-    Conditions:
-    - 'full': use all explanation information
-    - 'target_only': focus on target group information
-    - 'attack_only': focus on hateful attack aspects
-    - 'none': minimal conditioning
+    Format mirrors MemeRewriter.format_input (models/rewriter.py):
+      full:        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] </s> {text}
+      target_only: [T: <target_group>] [A: null] [M: null] </s> {text}
+      attack_only: [T: null] [A: <attack_type>] [M: null] </s> {text}
+      none:        [T: null] [A: null] [M: null] </s> {text}
+
+    Null fields are rendered as the literal string "null" (not Python None).
     """
     explanation_str = explanation or {}
+    tg = explanation_str.get("target_group") or "null"
+    at = explanation_str.get("attack_type") or "null"
+    im = explanation_str.get("implicit_meaning") or "null"
 
     if condition == "full":
-        prompt = (
-            f"Remove hateful content from: {original_text} "
-            f"[VISUAL] {explanation_str.get('visual_content', '')} "
-            f"[HATE] {explanation_str.get('hateful_elements', '')} "
-            f"[TARGET] {explanation_str.get('target_group', '')}"
-        )
+        prefix = f"[T: {tg}] [A: {at}] [M: {im}]"
     elif condition == "target_only":
-        prompt = (
-            f"Remove hateful content from: {original_text} "
-            f"[TARGET] {explanation_str.get('target_group', '')}"
-        )
+        prefix = f"[T: {tg}] [A: null] [M: null]"
     elif condition == "attack_only":
-        prompt = (
-            f"Remove hateful content from: {original_text} "
-            f"[HATE] {explanation_str.get('hateful_elements', '')}"
-        )
+        prefix = f"[T: null] [A: {at}] [M: null]"
     else:  # 'none'
-        prompt = f"Remove hateful content from: {original_text}"
+        prefix = "[T: null] [A: null] [M: null]"
 
-    return prompt
+    return f"{prefix} </s> {original_text}"
 
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 2: Generate BART-based rewrites")
-    parser.add_argument("--stage1_outputs", type=str, required=True, help="Path to Stage 1 explanation JSONL")
-    parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to BART checkpoint")
+    parser.add_argument(
+        "--stage1_output_dir",
+        type=str,
+        required=True,
+        help="Directory containing per-dataset Stage 1 JSONL outputs (e.g. /scratch/hmr_stage1_output)"
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        required=True,
+        help="Directory of the fine-tuned BART checkpoint (e.g. /scratch/hmr_stage2_phase2_full_checkpoint)"
+    )
     parser.add_argument(
         "--condition",
         type=str,
         choices=["full", "target_only", "attack_only", "none"],
         default="full",
-        help="Conditioning strategy"
+        help="Ablation conditioning strategy (full | target_only | attack_only | none)"
     )
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
@@ -138,8 +142,13 @@ def main():
     logger.info(f"Starting Stage 2 with condition={args.condition}, debug={args.debug}")
     logger.info(f"Arguments: {vars(args)}")
 
-    # Load Stage 1 outputs
-    examples = load_explanation_jsonl(args.stage1_outputs)
+    # Load Stage 1 outputs — collect all per-dataset explanation JSONL files
+    stage1_dir = Path(args.stage1_output_dir)
+    all_jsonl = sorted(stage1_dir.rglob("*_explanations.jsonl"))
+    examples = []
+    for jsonl_file in all_jsonl:
+        examples.extend(load_explanation_jsonl(str(jsonl_file)))
+    logger.info(f"Loaded {len(examples)} total examples from {len(all_jsonl)} datasets")
     if args.debug:
         examples = examples[:16]
     logger.info(f"Processing {len(examples)} examples")
@@ -153,24 +162,28 @@ def main():
         model_name = "facebook/bart-base"
         logger.info("Using bart-base for debug mode")
     else:
-        model_name = args.checkpoint_path
+        model_name = args.checkpoint_dir
 
     try:
         rewriter = MemeRewriter(
             model_name=model_name,
             cache_dir=args.hf_cache,
             device=device,
-            num_beams=args.num_beams
+            num_beams=args.num_beams,
+            debug=args.debug,
         )
+        rewriter.load_model()
     except Exception as e:
         logger.error(f"Failed to load BART model from {model_name}: {e}")
-        logger.info("Attempting fallback to facebook/bart-base")
+        logger.info("Attempting fallback to facebook/bart-large")
         rewriter = MemeRewriter(
-            model_name="facebook/bart-base",
+            model_name="facebook/bart-large",
             cache_dir=args.hf_cache,
             device=device,
-            num_beams=args.num_beams
+            num_beams=args.num_beams,
+            debug=args.debug,
         )
+        rewriter.load_model()
 
     # Prepare output path
     output_path = os.path.join(args.output_dir, f"stage2_rewrites_{args.condition}.jsonl")
@@ -212,7 +225,9 @@ def main():
                 # Process batch
                 if len(batch_texts) >= args.batch_size or (idx == len(examples) - 1 and batch_texts):
                     try:
-                        rewrites = rewriter.rewrite_batch(batch_prompts, max_length=128)
+                        # prompts are already fully formatted by build_condition_prompt;
+                        # use generate_from_formatted to avoid double-prefixing
+                        rewrites = rewriter.generate_from_formatted(batch_prompts, max_length=128)
 
                         for i, rewrite in enumerate(rewrites):
                             batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = rewrite

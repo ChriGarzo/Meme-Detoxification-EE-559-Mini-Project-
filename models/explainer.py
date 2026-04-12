@@ -48,6 +48,7 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         self,
         model_name: str = "llava-hf/llava-v1.6-mistral-7b-hf",
         load_in_4bit: bool = False,
+        cache_dir: Optional[str] = None,
         device: Optional[str] = None,
         debug: bool = False,
     ):
@@ -62,6 +63,7 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         """
         self.model_name = model_name
         self.load_in_4bit = load_in_4bit
+        self.cache_dir = cache_dir
         self.debug = debug
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.processor = None
@@ -72,7 +74,9 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         """Load the LLaVA model and processor."""
         logger.info(f"Loading model {self.model_name}...")
 
-        self.processor = LlavaNextProcessor.from_pretrained(self.model_name)
+        self.processor = LlavaNextProcessor.from_pretrained(
+            self.model_name, cache_dir=self.cache_dir
+        )
 
         quantization_config = None
         if self.load_in_4bit:
@@ -87,6 +91,7 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         self.model = LlavaNextForConditionalGeneration.from_pretrained(
             self.model_name,
             quantization_config=quantization_config,
+            cache_dir=self.cache_dir,
             device_map=self.device,
             torch_dtype=torch.float16 if self.load_in_4bit else torch.float32,
         )
