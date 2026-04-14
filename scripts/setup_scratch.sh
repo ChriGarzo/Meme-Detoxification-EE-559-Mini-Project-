@@ -26,10 +26,18 @@ echo "============================================================"
 if [ -f /scratch/hmr_data/harmeme/momenta.zip ]; then
     echo "momenta.zip already exists, skipping download."
 else
-    wget --show-progress \
-        -O /scratch/hmr_data/harmeme/momenta.zip \
-        https://github.com/LCS2-IIITD/MOMENTA/archive/refs/heads/main.zip
-    echo "Download complete."
+    python3 -c "
+import urllib.request, sys
+url = 'https://github.com/LCS2-IIITD/MOMENTA/archive/refs/heads/main.zip'
+dest = '/scratch/hmr_data/harmeme/momenta.zip'
+print('Downloading from', url)
+def progress(count, block_size, total_size):
+    pct = count * block_size * 100 // total_size
+    sys.stdout.write(f'\r  {pct}%  ({count * block_size // 1024 // 1024} MB)')
+    sys.stdout.flush()
+urllib.request.urlretrieve(url, dest, reporthook=progress)
+print('\nDownload complete.')
+"
 fi
 
 echo "Extracting..."
