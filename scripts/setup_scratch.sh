@@ -21,20 +21,22 @@ echo "Directory structure created."
 
 echo ""
 echo "============================================================"
-echo "  Downloading HarMeme (MOMENTA) from GitHub..."
+echo "  Downloading HarMeme (di-dimitrov/mmf) from GitHub..."
 echo "============================================================"
-if [ -f /scratch/hmr_data/harmeme/momenta.zip ]; then
-    echo "momenta.zip already exists, skipping download."
+if [ -f /scratch/hmr_data/harmeme/mmf.zip ]; then
+    echo "mmf.zip already exists, skipping download."
 else
     python3 -c "
 import urllib.request, sys
-url = 'https://github.com/LCS2-IIITD/MOMENTA/archive/refs/heads/main.zip'
-dest = '/scratch/hmr_data/harmeme/momenta.zip'
+url = 'https://github.com/di-dimitrov/mmf/archive/refs/heads/master.zip'
+dest = '/scratch/hmr_data/harmeme/mmf.zip'
 print('Downloading from', url)
 def progress(count, block_size, total_size):
-    pct = count * block_size * 100 // total_size
-    sys.stdout.write(f'\r  {pct}%  ({count * block_size // 1024 // 1024} MB)')
-    sys.stdout.flush()
+    if total_size > 0:
+        pct = min(100, count * block_size * 100 // total_size)
+        mb = count * block_size // 1024 // 1024
+        sys.stdout.write(f'\r  {pct}%  ({mb} MB)')
+        sys.stdout.flush()
 urllib.request.urlretrieve(url, dest, reporthook=progress)
 print('\nDownload complete.')
 "
@@ -42,18 +44,45 @@ fi
 
 echo "Extracting..."
 python3 -c "
-import zipfile, os
-z = zipfile.ZipFile('/scratch/hmr_data/harmeme/momenta.zip')
+import zipfile, os, shutil
+
+z = zipfile.ZipFile('/scratch/hmr_data/harmeme/mmf.zip')
 z.extractall('/scratch/hmr_data/harmeme/')
 print('Extraction complete.')
-print('Contents:', os.listdir('/scratch/hmr_data/harmeme/'))
+
+# Move images to the expected path
+src_images = '/scratch/hmr_data/harmeme/mmf-master/data/datasets/memes/defaults/images'
+dst_images = '/scratch/hmr_data/harmeme/images'
+if os.path.isdir(src_images):
+    if not os.path.isdir(dst_images) or not os.listdir(dst_images):
+        shutil.copytree(src_images, dst_images, dirs_exist_ok=True)
+        print(f'Images copied to {dst_images}')
+    else:
+        print(f'Images already at {dst_images}, skipping copy.')
+    print(f'Image count: {len(os.listdir(dst_images))}')
+else:
+    print(f'WARNING: images folder not found at {src_images}')
+    print('Contents of mmf-master/data/datasets/memes/defaults/:')
+    base = '/scratch/hmr_data/harmeme/mmf-master/data/datasets/memes/defaults'
+    if os.path.isdir(base):
+        for f in os.listdir(base):
+            print(' ', f)
+
+# Copy annotations too
+src_ann = '/scratch/hmr_data/harmeme/mmf-master/data/datasets/memes/defaults/annotations'
+dst_ann = '/scratch/hmr_data/harmeme/annotations'
+if os.path.isdir(src_ann):
+    shutil.copytree(src_ann, dst_ann, dirs_exist_ok=True)
+    print(f'Annotations copied to {dst_ann}')
+    print(f'Annotation files: {os.listdir(dst_ann)}')
 "
 
 echo ""
 echo "============================================================"
-echo "  HarMeme extracted. Folder structure:"
+echo "  HarMeme setup complete. Final structure:"
 echo "============================================================"
-find /scratch/hmr_data/harmeme/MOMENTA-main -maxdepth 3 -type d
+echo "Images:      $(ls /scratch/hmr_data/harmeme/images/ 2>/dev/null | wc -l) files"
+echo "Annotations: $(ls /scratch/hmr_data/harmeme/annotations/ 2>/dev/null)"
 
 echo ""
 echo "============================================================"
