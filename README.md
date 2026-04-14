@@ -208,7 +208,22 @@ cd hateful_meme_rewriting
 
 ---
 
-### Step 5 — Run the pipeline (sequential stages)
+### Step 5 — Download datasets and set up /scratch/ (once for the whole group)
+
+Run this **before any pipeline stage**. It creates the full `/scratch/` directory structure and downloads HarMeme automatically. MAMI and MMHS150K require manual steps (see output).
+
+```bash
+bash scripts/runai_download_datasets.sh <UID>
+runai logs hmr-download-datasets -p course-ee-559-<username> --follow
+```
+
+For **MAMI**: request access at https://forms.gle/AGWMiGicBHiQx4q98, then transfer images to `/scratch/hmr_data/mami/images/`.
+
+For **MMHS150K**: download from https://gombru.github.io/2019/10/09/MMHS/, then transfer images to `/scratch/hmr_data/mmhs150k/images/`.
+
+---
+
+### Step 6 — Run the pipeline (sequential stages)
 
 All scripts follow the same pattern:
 ```bash
