@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir \
 # --- Layer 5: Vision & OCR ---
 RUN pip install --no-cache-dir \
     Pillow>=10.0.0 \
-    opencv-python>=4.9.0 \
+    opencv-python-headless>=4.9.0 \
     easyocr>=1.7.0
 
 # --- Layer 6: Utilities ---
