@@ -2,7 +2,10 @@
 set -e
 
 # =============================================================================
-# Stage 0: OCR + CLIP meme filtering (no GPU needed)
+# Stage 0: OCR + CLIP meme filtering (GPU accelerated)
+#
+# Uses EasyOCR + CLIP — both run significantly faster on GPU.
+# For MMHS150K (~150K images) CPU would take many hours; GPU brings it to ~1h.
 #
 # Usage: bash scripts/runai_stage0_filter.sh <UID_NUMBER> [dataset]
 #
@@ -35,7 +38,7 @@ USERNAME="${USER}"        # automatically uses your current Unix username
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
 
-echo "=== Stage 0: Meme Filtering ==="
+echo "=== Stage 0: Meme Filtering (GPU) ==="
 echo "  User:    ${USERNAME} (UID: ${UID_NUM})"
 echo "  Group:   ${GROUP_NUM}"
 echo "  Dataset: ${DATASET}"
@@ -45,6 +48,7 @@ echo ""
 runai submit hmr-stage0-${DATASET} \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
+    --gpu 1 \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
@@ -56,4 +60,6 @@ runai submit hmr-stage0-${DATASET} \
         --hf_cache /scratch/hf_cache \
         --save_examples /scratch/hmr_data/${DATASET}/filter_examples
 
-echo "Stage 0 (${DATASET}) job submitted."
+echo "Stage 0 (${DATASET}) submitted with GPU."
+echo "Follow logs with:"
+echo "  runai logs hmr-stage0-${DATASET} -p course-ee-559-${USERNAME} --follow"
