@@ -117,18 +117,35 @@ def main():
         ]
     )
 
+    print(f"\n{'='*60}")
+    print(f"  Stage 1: LLaVA Explanations + Pseudo-rewrites")
+    print(f"  Dataset:    {args.dataset}")
+    print(f"  Images:     {args.images_dir}")
+    print(f"  Manifest:   {args.manifest_path}")
+    print(f"  Output:     {args.output_dir}")
+    print(f"  HF cache:   {args.hf_cache}")
+    print(f"  4-bit quant:{args.load_in_4bit}")
+    print(f"  Debug:      {args.debug}")
+    print(f"{'='*60}\n")
     logger.info(f"Starting Stage 1 with dataset={args.dataset}, debug={args.debug}")
     logger.info(f"Arguments: {vars(args)}")
 
     # Load manifest
     manifest_df = pd.read_csv(args.manifest_path)
+    total_in_manifest = len(manifest_df)
+    kept_in_manifest = int(manifest_df["kept"].sum()) if "kept" in manifest_df.columns else total_in_manifest
+    logger.info(f"Manifest loaded: {total_in_manifest} total rows, {kept_in_manifest} kept by Stage 0")
+    manifest_df = manifest_df[manifest_df["kept"] == True] if "kept" in manifest_df.columns else manifest_df
     if args.debug:
         manifest_df = manifest_df.head(16)
-    logger.info(f"Loaded manifest with {len(manifest_df)} examples")
+    logger.info(f"Processing {len(manifest_df)} examples")
 
     # Initialize models
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
+    if torch.cuda.is_available():
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)} | VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        logger.info("No GPU found — running on CPU (will be slow)")
 
     explainer = MemeExplainer(
         load_in_4bit=args.load_in_4bit,
@@ -236,6 +253,16 @@ def main():
                             processed_rewrite_ids.add(example_id)
 
                 pbar.update(1)
+
+                # Print running stats every 50 examples
+                if total_examples > 0 and total_examples % 50 == 0:
+                    keep_rate = 100 * kept_rewrites / max(total_pseudo_rewrites, 1)
+                    logger.info(
+                        f"[{total_examples}/{len(manifest_df)}] "
+                        f"explanations={total_examples} | "
+                        f"rewrites_kept={kept_rewrites}/{total_pseudo_rewrites} ({keep_rate:.1f}%) | "
+                        f"json_failures={json_parse_failures}"
+                    )
 
                 # Write batches every 100 examples
                 if (total_examples % 100) == 0 and explanations_batch:

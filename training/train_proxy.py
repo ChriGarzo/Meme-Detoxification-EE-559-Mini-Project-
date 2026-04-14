@@ -107,6 +107,21 @@ def main():
         os.environ["HF_HOME"] = args.hf_cache
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\n{'='*60}")
+    print(f"  Stage 4: Proxy Network Training")
+    print(f"  Stage 1 dir:  {args.stage1_output_dir}")
+    print(f"  Stage 2 dir:  {args.stage2_dataset_dir}")
+    print(f"  BART ckpt:    {args.bart_checkpoint_dir}")
+    print(f"  Output:       {args.output_dir}")
+    print(f"  Epochs:       {args.num_train_epochs}")
+    print(f"  Batch size:   {args.batch_size}")
+    print(f"  LR:           {args.learning_rate}")
+    if torch.cuda.is_available():
+        print(f"  GPU:          {torch.cuda.get_device_name(0)}")
+        print(f"  VRAM:         {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        print(f"  Device:       CPU (no GPU found)")
+    print(f"{'='*60}\n")
     logger.info(f"Using device: {device}")
 
     # -----------------------------------------------------------------------
@@ -195,6 +210,10 @@ def main():
         json.dump(history, f, indent=2)
 
     logger.info(f"Proxy training complete. Checkpoint saved to {args.output_dir}")
+    print(f"\n{'='*60}")
+    print(f"  Proxy Network Training COMPLETE")
+    print(f"  Checkpoint: {args.output_dir}")
+    print(f"{'='*60}\n")
 
     # -----------------------------------------------------------------------
     # Quick evaluation

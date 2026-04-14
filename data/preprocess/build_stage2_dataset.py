@@ -287,6 +287,13 @@ def main():
     # Set seeds for reproducibility
     set_seeds(42)
 
+    print(f"\n{'='*60}")
+    print(f"  Build Stage 2 Dataset")
+    print(f"  Stage 1 dir: {args.stage1_dir}")
+    print(f"  Output dir:  {args.output_dir}")
+    print(f"  Debug:       {args.debug}")
+    print(f"{'='*60}\n")
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -323,14 +330,29 @@ def main():
     write_jsonl(train_data, str(train_path))
     write_jsonl(val_data, str(val_path))
 
+    # Dataset source breakdown
+    from collections import Counter
+    dataset_counts = Counter(e.get("dataset", "unknown") for e in training_data)
+
     # Print summary
     print("\n" + "=" * 80)
     print("STAGE 2 DATASET BUILD SUMMARY")
     print("=" * 80)
-    print(f"Total examples loaded: {len(examples)}")
-    print(f"Training examples: {len(train_data)}")
-    print(f"Validation examples: {len(val_data)}")
-    print(f"Output directory: {output_dir}")
+    print(f"Total examples loaded from Stage 1: {len(examples)}")
+    print(f"After BERTScore filter:             {len(training_data)}")
+    print(f"  Training examples:                {len(train_data)}")
+    print(f"  Validation examples:              {len(val_data)}")
+    print(f"\nBreakdown by source dataset:")
+    for ds, count in sorted(dataset_counts.items()):
+        print(f"  {ds:<20} {count:>6} examples")
+    print(f"\nOutput directory: {output_dir}")
+    print(f"  train.jsonl: {len(train_data)} examples")
+    print(f"  val.jsonl:   {len(val_data)} examples")
+    if training_data:
+        ex = training_data[0]
+        print(f"\nExample input format:")
+        print(f"  INPUT:  {ex['input_text'][:80]}...")
+        print(f"  TARGET: {ex['target_text'][:80]}...")
     print("=" * 80 + "\n")
 
     return 0

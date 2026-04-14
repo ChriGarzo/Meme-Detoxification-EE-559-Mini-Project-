@@ -49,7 +49,14 @@ class MemeImageFilter:
 
         if not debug:
             logger.info("Loading EasyOCR model...")
-            self.ocr = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+            ocr_cache = os.path.join(hf_cache, "easyocr") if hf_cache else None
+            if ocr_cache:
+                os.makedirs(ocr_cache, exist_ok=True)
+            self.ocr = easyocr.Reader(
+                ['en'],
+                gpu=torch.cuda.is_available(),
+                model_storage_directory=ocr_cache,
+            )
 
             logger.info("Loading CLIP model (openai/clip-vit-large-patch14)...")
             self.clip_model = CLIPModel.from_pretrained(
@@ -206,7 +213,12 @@ class MemeImageFilter:
         failed_ocr_high = 0
         failed_clip = 0
 
-        for image_path in tqdm(image_files, desc=f"Filtering {dataset}"):
+        print(f"\n{'='*60}")
+        print(f"  STAGE 0 — Filtering {dataset.upper()} ({len(image_files)} images)")
+        print(f"  Device: {'GPU (' + torch.cuda.get_device_name(0) + ')' if torch.cuda.is_available() else 'CPU'}")
+        print(f"{'='*60}\n")
+
+        for i, image_path in enumerate(tqdm(image_files, desc=f"Filtering {dataset}")):
             original_label = labels_dict.get(str(image_path)) if labels_dict else None
             result = self.filter_image(str(image_path), dataset, original_label)
             results.append(result)
@@ -221,6 +233,16 @@ class MemeImageFilter:
                     failed_ocr_high += 1
                 else:
                     failed_clip += 1
+
+            # Print running stats every 100 images
+            if (i + 1) % 100 == 0:
+                num_kept_so_far = sum(1 for r in results if r["kept"])
+                keep_rate = 100 * num_kept_so_far / len(results)
+                logger.info(
+                    f"[{i+1}/{len(image_files)}] kept={num_kept_so_far} "
+                    f"({keep_rate:.1f}%) | ocr_low={failed_ocr_low} "
+                    f"ocr_high={failed_ocr_high} clip={failed_clip}"
+                )
 
         num_kept = sum(1 for r in results if r["kept"])
 
@@ -412,6 +434,15 @@ def main():
     # Debug mode warning
     if args.debug:
         logger.warning("DEBUG MODE ENABLED: Skipping all filters, returning all images as kept")
+
+    print(f"\n{'='*60}")
+    print(f"  Stage 0: OCR + CLIP Meme Filter")
+    print(f"  Dataset:  {args.dataset}")
+    print(f"  Images:   {args.images_dir}")
+    print(f"  Manifest: {args.output_manifest}")
+    print(f"  HF cache: {args.hf_cache}")
+    print(f"  Debug:    {args.debug}")
+    print(f"{'='*60}\n")
 
     # Initialize filter
     filter_obj = MemeImageFilter(hf_cache=args.hf_cache, debug=args.debug)

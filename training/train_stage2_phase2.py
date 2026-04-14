@@ -221,6 +221,21 @@ def main():
     eval_steps  = DEBUG_CONFIG["eval_steps"] if debug else 200
     fp16        = (not debug) and torch.cuda.is_available()
 
+    print(f"\n{'='*60}")
+    print(f"  Stage 2 Phase 2: BART Meme Fine-tuning")
+    print(f"  Condition:  {args.condition}")
+    print(f"  Checkpoint: {checkpoint}")
+    print(f"  Epochs:     {num_epochs}")
+    print(f"  Batch size: {train_batch}")
+    print(f"  LR:         {args.learning_rate}")
+    print(f"  FP16:       {fp16}")
+    print(f"  Output:     {args.output_dir}")
+    if torch.cuda.is_available():
+        print(f"  GPU:        {torch.cuda.get_device_name(0)}")
+        print(f"  VRAM:       {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        print(f"  Device:     CPU (no GPU found)")
+    print(f"{'='*60}\n")
     logger.info(f"Condition: {args.condition} | checkpoint: {checkpoint} | fp16: {fp16}")
 
     try:
@@ -302,11 +317,20 @@ def main():
         compute_metrics=compute_metrics,
     )
 
+    steps_per_epoch = len(train_dataset) // train_batch
+    total_steps = steps_per_epoch * num_epochs
+    logger.info(f"Dataset: {len(train_dataset)} train, {len(val_dataset)} val")
+    logger.info(f"Steps:   {steps_per_epoch} per epoch × {num_epochs} epochs = {total_steps} total")
+
     logger.info(f"Starting Phase 2 training (condition={args.condition})...")
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     logger.info(f"Phase 2 ({args.condition}) checkpoint saved to {args.output_dir}")
+    print(f"\n{'='*60}")
+    print(f"  Phase 2 [{args.condition}] COMPLETE — checkpoint saved to:")
+    print(f"  {args.output_dir}")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
