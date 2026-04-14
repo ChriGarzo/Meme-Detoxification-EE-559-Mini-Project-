@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -426,6 +427,21 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    # Suppress noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("easyocr").setLevel(logging.WARNING)
+
+    # Suppress PyTorch pin_memory warning (fires on every EasyOCR batch on CPU)
+    warnings.filterwarnings(
+        "ignore",
+        message=".*pin_memory.*no accelerator.*",
+        category=UserWarning,
     )
 
     # Set seeds for reproducibility
