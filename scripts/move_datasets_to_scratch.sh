@@ -20,7 +20,8 @@ set -e
 #   DATASET env var controls which dataset to move: mami | mmhs150k | all (default: all)
 # =============================================================================
 
-HOME_UPLOAD="/home/${USER}/datasets_upload"
+# HOME_UPLOAD can be injected by the RunAI wrapper (since $USER is empty in containers)
+HOME_UPLOAD="${HOME_UPLOAD:-/home/${USER}/datasets_upload}"
 DATASET="${DATASET:-all}"
 
 echo "============================================================"

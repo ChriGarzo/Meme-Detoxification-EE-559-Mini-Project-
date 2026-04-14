@@ -38,7 +38,7 @@ runai submit ${JOB_NAME} \
     --image ${IMAGE} \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
-    --command -- bash -c "DATASET=${DATASET} bash /home/${USERNAME}/hateful_meme_rewriting/scripts/move_datasets_to_scratch.sh"
+    --command -- bash -c "DATASET=${DATASET} HOME_UPLOAD=/home/${USERNAME}/datasets_upload bash /home/${USERNAME}/hateful_meme_rewriting/scripts/move_datasets_to_scratch.sh"
 
 echo "Job submitted. Follow logs with:"
 echo "  runai logs ${JOB_NAME} -p course-ee-559-${USERNAME} --follow"
