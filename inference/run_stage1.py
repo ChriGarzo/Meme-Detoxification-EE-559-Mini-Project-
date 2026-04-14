@@ -182,9 +182,15 @@ def main():
         with tqdm.tqdm(total=len(manifest_df), desc="Processing examples") as pbar:
             for idx, row in manifest_df.iterrows():
                 example_id = row.get("id")
-                image_path = os.path.join(args.images_dir, row.get("image_path"))
-                original_text = row.get("text", "")
-                is_hateful = row.get("hateful", False)
+                # unified manifest has absolute image_path; fallback joins images_dir
+                raw_img = str(row.get("image_path", ""))
+                if os.path.isabs(raw_img) and os.path.exists(raw_img):
+                    image_path = raw_img
+                else:
+                    image_path = os.path.join(args.images_dir, raw_img)
+                # prefer annotated text; fall back to OCR text from Stage 0
+                original_text = str(row.get("text", "") or row.get("ocr_text", ""))
+                is_hateful = bool(row.get("hateful", False))
 
                 # Check if already processed
                 if example_id in processed_explanation_ids:

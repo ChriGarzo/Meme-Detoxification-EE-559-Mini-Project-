@@ -86,10 +86,48 @@ echo "Annotations: $(ls /scratch/hmr_data/harmeme/annotations/ 2>/dev/null)"
 
 echo ""
 echo "============================================================"
-echo "  DONE. /scratch is ready."
+echo "  MAMI — checking..."
+echo "============================================================"
+MAMI_COUNT=$(ls /scratch/hmr_data/mami/images/ 2>/dev/null | wc -l)
+if [ "$MAMI_COUNT" -gt 0 ]; then
+    echo "  [OK] MAMI already in place: $MAMI_COUNT images found."
+else
+    echo "  [MISSING] MAMI images not found."
+    echo ""
+    echo "  MAMI requires manual access. Steps:"
+    echo "  1. Fill the form: https://forms.gle/AGWMiGicBHiQx4q98"
+    echo "  2. You will receive a link to a password-protected ZIP."
+    echo "  3. Download and extract it on your laptop."
+    echo "  4. Transfer the images to the cluster:"
+    echo "     scp -r /path/to/mami/images/ garzone@jumphost.rcp.epfl.ch:/tmp/"
+    echo "     Then inside a RunAI job, move them to /scratch/hmr_data/mami/images/"
+fi
+
 echo ""
-echo "  MAMI: request at https://forms.gle/AGWMiGicBHiQx4q98"
-echo "    then place images in /scratch/hmr_data/mami/images/"
-echo "  MMHS150K: download from https://gombru.github.io/2019/10/09/MMHS/"
-echo "    then place images in /scratch/hmr_data/mmhs150k/images/"
+echo "============================================================"
+echo "  MMHS150K — checking..."
+echo "============================================================"
+MMHS_COUNT=$(ls /scratch/hmr_data/mmhs150k/images/ 2>/dev/null | wc -l)
+if [ "$MMHS_COUNT" -gt 0 ]; then
+    echo "  [OK] MMHS150K already in place: $MMHS_COUNT images found."
+else
+    echo "  [MISSING] MMHS150K images not found."
+    echo ""
+    echo "  MMHS150K has no public direct download. Options:"
+    echo "  Option A — Kaggle (easiest):"
+    echo "    https://www.kaggle.com/datasets/victorcallejasf/multimodal-hate-speech"
+    echo "    Download on your laptop, then transfer to cluster:"
+    echo "    scp -r /path/to/mmhs150k/images/ garzone@jumphost.rcp.epfl.ch:/tmp/"
+    echo "  Option B — Contact the authors:"
+    echo "    https://gombru.github.io/2019/10/09/MMHS/"
+fi
+
+echo ""
+echo "============================================================"
+echo "  SUMMARY"
+echo "============================================================"
+HARM_COUNT=$(ls /scratch/hmr_data/harmeme/images/ 2>/dev/null | wc -l)
+echo "  HarMeme:  $([ $HARM_COUNT -gt 0 ] && echo "[OK] $HARM_COUNT images" || echo "[MISSING]")"
+echo "  MAMI:     $([ $MAMI_COUNT -gt 0 ] && echo "[OK] $MAMI_COUNT images" || echo "[MISSING] — manual steps required")"
+echo "  MMHS150K: $([ $MMHS_COUNT -gt 0 ] && echo "[OK] $MMHS_COUNT images" || echo "[MISSING] — manual steps required")"
 echo "============================================================"
