@@ -9,33 +9,40 @@ A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured h
 ## Pipeline Overview
 
 ```
-Stage 0 ──── OCR + CLIP filtering
+Stage 0 ──── OCR + CLIP filtering  [per dataset, GPU]
                │  EasyOCR extracts meme text (10–300 chars)
                │  CLIP score: meme_score > screenshot_score
+               │  Outputs: /scratch/hmr_data/<dataset>/manifest.csv
                ▼
-Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites
-               │  For each filtered meme:
+  Build Unified Splits
+               │  Reads Stage 0 manifests (kept=True only)
+               │  Stratified 80/10/10 split by (dataset, hateful)
+               │  All 3 datasets represented in every split
+               │  Outputs: unified_train.csv / unified_val.csv / unified_test.csv
+               ▼
+Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites  [GPU]
+               │  Run on unified_train split only
                │    - target_group, attack_type, implicit_meaning
-               │    - pseudo-rewrite (teacher output, BERTScore filtered)
+               │    - pseudo-rewrite (teacher output, BERTScore + STA filtered)
                ▼
    Build Stage 2 Dataset
                │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
                │  Input format: [T: {target}] [A: {attack}] [M: {meaning}] </s> {text}
                ▼
-Stage 2 Ph1 ── BART ParaDetox warm-up
+Stage 2 Ph1 ── BART ParaDetox warm-up  [GPU]
                │  Seq2SeqTrainer on s-nlp/paradetox
                │  2 epochs, lr=5e-5, warmup=500
                ▼
-Stage 2 Ph2 ── BART meme fine-tuning (×4 conditions in parallel)
+Stage 2 Ph2 ── BART meme fine-tuning (×4 conditions in parallel)  [GPU]
                │  Conditions: full | target_only | attack_only | none
                │  3 epochs, lr=2e-5, starts from Phase 1 checkpoint
                ▼
-Stage 4 ──── Proxy network training
+Stage 4 ──── Proxy network training  [GPU]
                │  3-layer MLP: concat(CLIP image + CLIP text) [1536-dim]
                │    → BART encoder hidden state [1024-dim]
                │  Enables VLM-free inference at deployment
                ▼
-Stage 3 ──── Evaluation
+Stage 3 ──── Evaluation  [GPU]
                BLEU, ROUGE-L, BERTScore, toxicity reduction
                + LLaVA structured-prompt baseline
 ```
@@ -59,9 +66,9 @@ hateful_meme_rewriting/
 │   └── requirements_docker.txt
 │
 ├── data/
-│   ├── download_datasets.sh
 │   └── preprocess/
-│       ├── filter_meme_images.py      ← Stage 0: OCR + CLIP filter
+│       ├── filter_meme_images.py      ← Stage 0: OCR + CLIP filter (per dataset)
+│       ├── build_unified_splits.py    ← builds 80/10/10 splits from Stage 0 manifests
 │       ├── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val JSONL
 │       └── rule_based_labels.py
 │
@@ -99,7 +106,12 @@ hateful_meme_rewriting/
 │
 └── scripts/
     ├── run_debug_local.sh             ← full pipeline locally (no GPU needed)
-    ├── runai_stage0_filter.sh
+    ├── setup_scratch.sh               ← creates /scratch/ layout + downloads HarMeme
+    ├── move_datasets_to_scratch.sh    ← moves MAMI/MMHS150K from home → scratch
+    ├── runai_download_datasets.sh     ← RunAI wrapper for setup_scratch.sh
+    ├── runai_move_datasets.sh         ← RunAI wrapper for move_datasets_to_scratch.sh
+    ├── runai_stage0_filter.sh         ← Stage 0 per dataset (GPU)
+    ├── runai_build_unified_splits.sh  ← builds unified splits after Stage 0
     ├── runai_stage1_explain.sh
     ├── runai_build_stage2_dataset.sh
     ├── runai_stage2_phase1.sh
@@ -208,18 +220,26 @@ cd hateful_meme_rewriting
 
 ---
 
-### Step 5 — Download datasets and set up /scratch/ (once for the whole group)
+### Step 5 — Download and transfer datasets (once for the whole group)
 
-Run this **before any pipeline stage**. It creates the full `/scratch/` directory structure and downloads HarMeme automatically. MAMI and MMHS150K require manual steps (see output).
-
+**HarMeme** — downloaded automatically:
 ```bash
 bash scripts/runai_download_datasets.sh <UID>
 runai logs hmr-download-datasets -p course-ee-559-<username> --follow
 ```
 
-For **MAMI**: request access at https://forms.gle/AGWMiGicBHiQx4q98, then transfer images to `/scratch/hmr_data/mami/images/`.
+**MAMI** — request access at https://forms.gle/AGWMiGicBHiQx4q98, then from Windows PowerShell:
+```powershell
+ssh <username>@jumphost.rcp.epfl.ch "mkdir -p ~/datasets_upload"
+scp -r "C:\path\to\MAMI" <username>@jumphost.rcp.epfl.ch:/home/<username>/datasets_upload/
+scp -r "C:\path\to\MMHS150K dataset" <username>@jumphost.rcp.epfl.ch:/home/<username>/datasets_upload/
+```
 
-For **MMHS150K**: download from https://gombru.github.io/2019/10/09/MMHS/, then transfer images to `/scratch/hmr_data/mmhs150k/images/`.
+Then move both from home to scratch (only accessible inside a RunAI container):
+```bash
+bash scripts/runai_move_datasets.sh <UID>
+runai logs hmr-move-datasets -p course-ee-559-<username> --follow
+```
 
 ---
 
@@ -232,15 +252,22 @@ bash scripts/runai_<stage>.sh <UID> [optional args]
 
 Your `$USER` is read automatically from the environment — you never edit the scripts.
 
-**Stage 0 — Filter memes** (run once; outputs shared on /scratch/)
+**Stage 0 — Filter memes** (GPU; run once per dataset; outputs shared on /scratch/)
 ```bash
 bash scripts/runai_stage0_filter.sh <UID> harmeme
 bash scripts/runai_stage0_filter.sh <UID> mami
 bash scripts/runai_stage0_filter.sh <UID> mmhs150k
 ```
-After each run, visual grids of kept and discarded images are saved to `/scratch/hmr_data/<dataset>/filter_examples/` (files `kept_examples.png` and `discarded_examples.png`) so you can verify the filter is working correctly.
+Each job outputs a `manifest.csv` with OCR/CLIP scores and a `kept` flag, plus visual grids of kept/discarded images at `/scratch/hmr_data/<dataset>/filter_examples/` for QC.
 
-**Stage 1 — LLaVA explanations + pseudo-rewrites** (all datasets, one job each)
+**Build unified splits** (run after ALL three Stage 0 jobs complete)
+```bash
+bash scripts/runai_build_unified_splits.sh <UID>
+runai logs hmr-build-unified-splits -p course-ee-559-<username> --follow
+```
+Reads the three Stage 0 manifests, filters to `kept=True` images only, then creates stratified 80/10/10 splits ensuring all three datasets are represented in every split. Outputs `unified_train.csv`, `unified_val.csv`, `unified_test.csv` to `/scratch/hmr_data/unified_splits/`.
+
+**Stage 1 — LLaVA explanations + pseudo-rewrites** (runs on unified training split)
 ```bash
 bash scripts/runai_stage1_explain.sh <UID>
 ```
@@ -281,12 +308,18 @@ bash scripts/runai_evaluate.sh <UID>
 ├── hmr_data/
 │   ├── harmeme/
 │   │   ├── images/                         ← raw images
-│   │   ├── manifest.csv                    ← Stage 0 output (filtered)
+│   │   ├── annotations/                    ← train/val/test.jsonl
+│   │   ├── manifest.csv                    ← Stage 0 output (OCR/CLIP scores + kept flag)
 │   │   └── filter_examples/
 │   │       ├── kept_examples.png           ← visual QC grid
 │   │       └── discarded_examples.png
-│   ├── mami/  (same structure)
-│   └── mmhs150k/  (same structure)
+│   ├── mami/   (same structure)
+│   ├── mmhs150k/  (same structure)
+│   └── unified_splits/                     ← built after all Stage 0 jobs complete
+│       ├── unified_train.csv
+│       ├── unified_val.csv
+│       ├── unified_test.csv
+│       └── split_stats.json
 ├── hmr_stage1_output/
 │   ├── harmeme/
 │   │   ├── harmeme_explanations.jsonl
