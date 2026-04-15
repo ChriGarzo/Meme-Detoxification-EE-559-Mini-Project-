@@ -214,7 +214,7 @@ id -u    # e.g. 123456
 
 ```bash
 cd /home/${USER}/
-git clone <repo_url>
+git clone https://github.com/ChriGarzo/Meme-Detoxification-EE-559-Mini-Project-.git hateful_meme_rewriting
 cd hateful_meme_rewriting
 ```
 
