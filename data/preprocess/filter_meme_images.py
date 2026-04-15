@@ -477,16 +477,6 @@ def main():
             "Raise this value to keep fewer but cleaner MMHS150K images."
         )
     )
-    parser.add_argument(
-        "--force_rerun",
-        action="store_true",
-        help=(
-            "Delete the existing manifest and rerun filtering from scratch. "
-            "Useful when you have changed filtering settings (e.g. new CLIP "
-            "thresholds for MMHS150K) and need to regenerate the manifest."
-        )
-    )
-
     args = parser.parse_args()
 
     # Setup logging
@@ -519,8 +509,7 @@ def main():
     print(f"  Images:      {args.images_dir}")
     print(f"  Manifest:    {args.output_manifest}")
     print(f"  HF cache:    {args.hf_cache}")
-    print(f"  Debug:       {args.debug}")
-    print(f"  Force rerun: {args.force_rerun}")
+    print(f"  Debug:    {args.debug}")
     print(f"{'='*60}\n")
 
     output_path = Path(args.output_manifest)
@@ -529,18 +518,8 @@ def main():
     # Resume check: skip if manifest already exists, unless --force_rerun.
     # ------------------------------------------------------------------
     if output_path.exists():
-        if args.force_rerun:
-            logger.warning(
-                f"--force_rerun: deleting existing manifest at {output_path} "
-                "and rerunning filtering."
-            )
-            output_path.unlink()
-        else:
-            logger.info(
-                f"Manifest already exists at {output_path} — skipping filtering. "
-                "Pass --force_rerun to delete it and rerun."
-            )
-            return 0
+        logger.info(f"Manifest already exists at {output_path} — skipping filtering.")
+        return 0
 
     # ------------------------------------------------------------------
     # Full run: filter images and write manifest.
