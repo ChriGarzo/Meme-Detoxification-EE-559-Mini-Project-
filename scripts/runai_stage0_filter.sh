@@ -36,7 +36,7 @@ DATASET="${2:-harmeme}"   # default to harmeme if not provided
 # --- Configuration (do NOT edit these) ---
 USERNAME="${USER}"        # automatically uses your current Unix username
 GROUP_NUM="31"
-IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
+IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 
 echo "=== Stage 0: Meme Filtering (GPU) ==="
 echo "  User:    ${USERNAME} (UID: ${UID_NUM})"

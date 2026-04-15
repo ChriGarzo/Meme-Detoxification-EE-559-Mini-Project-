@@ -164,7 +164,7 @@ Downloaded automatically from HuggingFace by `train_stage2_phase1.py` at trainin
 |---|---|
 | Group scratch PVC | `course-ee-559-scratch-g31` mounted at `/scratch/` |
 | Personal home PVC | `home` mounted at `/home/${USER}/` |
-| Docker registry | `registry.rcp.epfl.ch/ee-559-<username>/hmr:v0.1` |
+| Docker registry | `registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1` (shared, public) |
 | RunAI project | `course-ee-559-<username>` |
 
 All datasets, model checkpoints, and HuggingFace caches live on `/scratch/` (shared by all group members). Code lives in each member's personal `/home/${USER}/`. **Datasets and checkpoints only need to be produced once by any one member.**

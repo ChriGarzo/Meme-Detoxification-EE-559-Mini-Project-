@@ -28,7 +28,7 @@ fi
 UID_NUM="$1"
 USERNAME="${USER}"
 GROUP_NUM="31"
-IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
+IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 
 echo "=== Build Unified Splits (post-Stage-0) ==="
 echo "  User:  ${USERNAME} (UID: ${UID_NUM})"

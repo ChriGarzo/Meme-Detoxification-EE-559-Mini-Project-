@@ -29,7 +29,7 @@ UID_NUM="$1"
 # --- Configuration (do NOT edit these) ---
 USERNAME="${USER}"
 GROUP_NUM="31"
-IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
+IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 
 echo "=== Build Stage 2 Dataset ==="
 echo "  User:  ${USERNAME} (UID: ${UID_NUM})"

@@ -25,7 +25,7 @@ UID_NUM="$1"
 DATASET="${2:-all}"
 USERNAME="${USER}"
 GROUP_NUM="31"
-IMAGE="registry.rcp.epfl.ch/ee-559-${USERNAME}/hmr:v0.1"
+IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 JOB_NAME="hmr-move-${DATASET}"
 
 echo "=== Moving datasets to /scratch/ ==="
