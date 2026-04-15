@@ -57,8 +57,7 @@ runai submit hmr-stage0-${DATASET} \
         --dataset ${DATASET} \
         --images_dir /scratch/hmr_data/${DATASET}/images \
         --output_manifest /scratch/hmr_data/${DATASET}/manifest.csv \
-        --hf_cache /scratch/hf_cache \
-        --save_examples /scratch/hmr_data/${DATASET}/filter_examples
+        --hf_cache /scratch/hf_cache
 
 echo "Stage 0 (${DATASET}) submitted with GPU."
 echo "Follow logs with:"
