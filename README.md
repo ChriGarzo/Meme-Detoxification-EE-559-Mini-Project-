@@ -11,7 +11,7 @@ A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured h
 ```
 Stage 0 ──── OCR + CLIP filtering  [per dataset, GPU]
                │  EasyOCR extracts meme text (10–300 chars)
-               │  CLIP score: meme_score > screenshot_score
+               │  CLIP filter (dataset-specific — see Preprocessing section)
                │  Outputs: /scratch/hmr_data/<dataset>/manifest.csv
                ▼
   Build Unified Splits
@@ -68,6 +68,7 @@ hateful_meme_rewriting/
 ├── data/
 │   └── preprocess/
 │       ├── filter_meme_images.py      ← Stage 0: OCR + CLIP filter (per dataset)
+│       ├── sample_filter_examples.py  ← visual QC: samples 50 kept/discarded per dataset
 │       ├── build_unified_splits.py    ← builds 80/10/10 splits from Stage 0 manifests
 │       ├── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val JSONL
 │       └── rule_based_labels.py
@@ -111,6 +112,7 @@ hateful_meme_rewriting/
     ├── runai_download_datasets.sh     ← RunAI wrapper for setup_scratch.sh
     ├── runai_move_datasets.sh         ← RunAI wrapper for move_datasets_to_scratch.sh
     ├── runai_stage0_filter.sh         ← Stage 0 per dataset (GPU)
+    ├── runai_sample_filter_examples.sh ← QC sampling after Stage 0 (no GPU needed)
     ├── runai_build_unified_splits.sh  ← builds unified splits after Stage 0
     ├── runai_stage1_explain.sh
     ├── runai_build_stage2_dataset.sh
@@ -153,6 +155,34 @@ Download from: https://gombru.github.io/2019/10/09/MMHS/
 
 ### ParaDetox
 Downloaded automatically from HuggingFace by `train_stage2_phase1.py` at training time (`s-nlp/paradetox`). No manual step needed.
+
+---
+
+## Stage 0 Preprocessing
+
+All three datasets go through the same two-stage filter in `filter_meme_images.py`, but the CLIP decision rule differs per dataset to account for their different origins.
+
+**Stage 1 — OCR (identical for all datasets)**
+EasyOCR extracts text from each image. Images with fewer than 10 or more than 300 characters are discarded. This removes images with no readable text (plain photos, blank images) and images that are mostly text (dense articles, long chat threads).
+
+**Stage 2 — CLIP (dataset-specific)**
+
+| Dataset | Origin | CLIP logic |
+|---------|--------|------------|
+| HarMeme | Curated COVID-19 meme collection | Binary: 2 prompts. Keep if `meme_score > screenshot_score`. |
+| MAMI | Curated misogynous meme collection | Binary: 2 prompts. Keep if `meme_score > screenshot_score`. |
+| MMHS150K | Raw Twitter posts | Multi-class: 5 prompts. Keep only if the meme prompt scores highest among all 5 **and** reaches a minimum threshold of 0.45. |
+
+HarMeme and MAMI are curated datasets where images are already overwhelmingly memes, so the simple binary check is sufficient. MMHS150K is scraped directly from Twitter and contains a large proportion of non-meme content — plain photos of people, social media video thumbnails, and phone UI screenshots — that score close enough to the meme prompt to pass the binary filter. The stricter multi-class check uses four targeted negative prompts to catch these cases:
+
+- `"a screenshot of a text message, tweet, or text conversation"`
+- `"a screenshot of a social media video post or video thumbnail"`
+- `"a plain photograph of a person or scene without any overlaid text"`
+- `"a screenshot of a mobile phone or social media app interface"`
+
+The threshold of 0.45 can be adjusted at runtime via `--mmhs150k_clip_threshold` if needed.
+
+Each run produces a `manifest.csv` with one row per image containing the OCR text, CLIP scores, and a `kept` boolean. MMHS150K manifests additionally include `clip_best_negative` (which negative class scored highest) and `clip_threshold_used` for debugging. The manifests are then consumed by `build_unified_splits.py` to assemble the final training data.
 
 ---
 
@@ -258,7 +288,15 @@ bash scripts/runai_stage0_filter.sh <UID> harmeme
 bash scripts/runai_stage0_filter.sh <UID> mami
 bash scripts/runai_stage0_filter.sh <UID> mmhs150k
 ```
-Each job outputs a `manifest.csv` with OCR/CLIP scores and a `kept` flag, plus visual grids of kept/discarded images at `/scratch/hmr_data/<dataset>/filter_examples/` for QC.
+Each job outputs a `manifest.csv` with OCR/CLIP scores and a `kept` flag. To visually inspect the results after all three jobs complete:
+```bash
+bash scripts/runai_sample_filter_examples.sh <UID>
+runai logs hmr-sample-filter-examples -p course-ee-559-<username> --follow
+```
+This produces `/scratch/hmr_data/filtering_results/` with 50 kept and 50 discarded images per dataset. Copy it to your laptop with:
+```bash
+scp -r <username>@jumphost.rcp.epfl.ch:/scratch/hmr_data/filtering_results/ .
+```
 
 **Build unified splits** (run after ALL three Stage 0 jobs complete)
 ```bash
@@ -309,12 +347,18 @@ bash scripts/runai_evaluate.sh <UID>
 │   ├── harmeme/
 │   │   ├── images/                         ← raw images
 │   │   ├── annotations/                    ← train/val/test.jsonl
-│   │   ├── manifest.csv                    ← Stage 0 output (OCR/CLIP scores + kept flag)
-│   │   └── filter_examples/
-│   │       ├── kept_examples.png           ← visual QC grid
-│   │       └── discarded_examples.png
+│   │   └── manifest.csv                    ← Stage 0 output (OCR/CLIP scores + kept flag)
 │   ├── mami/   (same structure)
 │   ├── mmhs150k/  (same structure)
+│   ├── filtering_results/                  ← QC output from runai_sample_filter_examples.sh
+│   │   ├── kept/
+│   │   │   ├── harmeme/
+│   │   │   ├── mami/
+│   │   │   └── mmhs150k/
+│   │   └── discarded/
+│   │       ├── harmeme/
+│   │       ├── mami/
+│   │       └── mmhs150k/
 │   └── unified_splits/                     ← built after all Stage 0 jobs complete
 │       ├── unified_train.csv
 │       ├── unified_val.csv

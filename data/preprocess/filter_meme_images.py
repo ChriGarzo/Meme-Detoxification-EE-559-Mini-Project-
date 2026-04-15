@@ -517,6 +517,10 @@ def main():
     # ------------------------------------------------------------------
     # Resume check: skip if manifest already exists, unless --force_rerun.
     # ------------------------------------------------------------------
+    if output_path.exists():
+        logger.info(f"Manifest already exists at {output_path} — skipping filtering.")
+        return 0
+
     # ------------------------------------------------------------------
     # Full run: filter images and write manifest.
     # ------------------------------------------------------------------

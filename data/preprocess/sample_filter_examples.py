@@ -6,23 +6,22 @@ copies a random sample of kept and discarded images into an output directory
 so you can visually inspect the quality of the filter.
 
 Output layout:
-    <output_dir>/
-        harmeme/
-            kept/        ← up to N images that PASSED the filter
-            discarded/   ← up to N images that FAILED the filter
-        mami/
-            kept/
-            discarded/
-        mmhs150k/
-            kept/
-            discarded/
+    <output_dir>/                 (default: /scratch/hmr_data/filtering_results)
+        kept/
+            harmeme/
+            mami/
+            mmhs150k/
+        discarded/
+            harmeme/
+            mami/
+            mmhs150k/
 
 Usage example:
     python data/preprocess/sample_filter_examples.py \\
         --harmeme_manifest  /scratch/hmr_data/harmeme/manifest.csv \\
         --mami_manifest     /scratch/hmr_data/mami/manifest.csv \\
         --mmhs150k_manifest /scratch/hmr_data/mmhs150k/manifest.csv \\
-        --output_dir        /scratch/hmr_data/filter_examples \\
+        --output_dir        /scratch/hmr_data/filtering_results \\
         --n_examples        50
 """
 
@@ -93,10 +92,8 @@ def sample_and_copy(
     kept_sample      = rng.sample(kept_rows,      min(n_examples, len(kept_rows)))
     discarded_sample = rng.sample(discarded_rows, min(n_examples, len(discarded_rows)))
 
-    base = output_dir / dataset_name
-
     for subset_name, sample in [("kept", kept_sample), ("discarded", discarded_sample)]:
-        dest = base / subset_name
+        dest = output_dir / subset_name / dataset_name
         dest.mkdir(parents=True, exist_ok=True)
 
         copied  = 0
@@ -121,7 +118,6 @@ def sample_and_copy(
         f"kept={len(kept_rows):>6}  discarded={len(discarded_rows):>6}  "
         f"sampled {min(n_examples, len(kept_rows))} kept "
         f"+ {min(n_examples, len(discarded_rows))} discarded"
-        f"  →  {base}"
     )
 
 
@@ -157,7 +153,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/scratch/hmr_data/filter_examples",
+        default="/scratch/hmr_data/filtering_results",
         help="Root directory where sampled images will be written",
     )
     parser.add_argument(
