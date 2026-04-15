@@ -14,6 +14,9 @@ CLIP logic is dataset-specific:
                      that slip through the simpler binary filter.
 
 Output: CSV manifest with OCR/CLIP scores and filtering decisions.
+
+To visually inspect results after filtering, use the companion script:
+    data/preprocess/sample_filter_examples.py
 """
 
 import argparse
@@ -21,7 +24,6 @@ import csv
 import logging
 import os
 import random
-import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -244,14 +246,14 @@ class MemeImageFilter:
         is_mmhs = dataset.lower() == "mmhs150k"
 
         result = {
-            "image_path":          image_path,
-            "dataset":             dataset,
-            "original_label":      original_label or "",
-            "ocr_text":            "",
-            "ocr_char_count":      0,
-            "clip_meme_score":     0.0,
+            "image_path":            image_path,
+            "dataset":               dataset,
+            "original_label":        original_label or "",
+            "ocr_text":              "",
+            "ocr_char_count":        0,
+            "clip_meme_score":       0.0,
             "clip_screenshot_score": 0.0,
-            "kept":                False,
+            "kept":                  False,
         }
         if is_mmhs:
             result["clip_best_negative"]  = ""
@@ -382,11 +384,11 @@ class MemeImageFilter:
         num_kept = sum(1 for r in results if r["kept"])
 
         stats = {
-            "total":            len(results),
-            "failed_ocr_low":   failed_ocr_low,
-            "failed_ocr_high":  failed_ocr_high,
-            "failed_clip":      failed_clip,
-            "kept":             num_kept,
+            "total":           len(results),
+            "failed_ocr_low":  failed_ocr_low,
+            "failed_ocr_high": failed_ocr_high,
+            "failed_clip":     failed_clip,
+            "kept":            num_kept,
         }
         if is_mmhs:
             stats["failed_clip_threshold"] = failed_clip_threshold
@@ -394,44 +396,6 @@ class MemeImageFilter:
             stats["clip_threshold"]        = self.mmhs150k_threshold
 
         return results, stats
-
-
-def save_example_images(
-    results: list,
-    output_dir: str,
-    n_examples: int = 10,
-):
-    """
-    Save up to n_examples individual images into two subfolders:
-        <output_dir>/kept/       ← images that passed the filter
-        <output_dir>/discarded/  ← images that failed the filter
-
-    Skips a subfolder if it already exists (so re-running is safe).
-    """
-    output_dir = Path(output_dir)
-
-    kept      = [r for r in results if str(r.get("kept", "")).lower() in ("true", "1")]
-    discarded = [r for r in results if str(r.get("kept", "")).lower() not in ("true", "1")]
-
-    random.seed(0)
-
-    def _copy_sample(records: list, dest: Path):
-        if dest.exists():
-            logger.info(f"  {dest.name}/ already exists — skipping")
-            return
-        dest.mkdir(parents=True)
-        sample = random.sample(records, min(n_examples, len(records)))
-        if not sample:
-            logger.info(f"  No images to save in {dest.name}/")
-            return
-        for record in sample:
-            src = Path(record["image_path"])
-            if src.exists():
-                shutil.copy2(src, dest / src.name)
-        logger.info(f"  Saved {len(sample)} images → {dest}")
-
-    _copy_sample(kept,      output_dir / "kept")
-    _copy_sample(discarded, output_dir / "discarded")
 
 
 def print_summary_table(all_stats: dict):
@@ -462,7 +426,7 @@ def print_summary_table(all_stats: dict):
     for ds, s in all_stats.items():
         if "failed_clip_threshold" in s:
             print(f"\n  MMHS150K CLIP breakdown (threshold={s.get('clip_threshold', '?')}):")
-            _row("  ↳ meme score below threshold", s["failed_clip_threshold"])
+            _row("  ↳ meme score below threshold",   s["failed_clip_threshold"])
             _row("  ↳ negative class scored higher", s["failed_clip_not_top"])
 
     print("=" * 80 + "\n")
@@ -503,23 +467,6 @@ def main():
         help="HuggingFace cache directory (default: ~/.cache/huggingface)"
     )
     parser.add_argument(
-        "--save_examples",
-        type=str,
-        default=None,
-        metavar="DIR",
-        help=(
-            "If provided, save two image grids (kept / discarded) to this directory "
-            "after filtering, so you can visually verify the filter is working correctly. "
-            "Example: --save_examples /scratch/hmr_data/harmeme/filter_examples"
-        )
-    )
-    parser.add_argument(
-        "--n_examples",
-        type=int,
-        default=10,
-        help="Number of example images to copy per folder (default: 10)"
-    )
-    parser.add_argument(
         "--mmhs150k_clip_threshold",
         type=float,
         default=None,
@@ -528,6 +475,15 @@ def main():
             f"(default: {MMHS150K_CLIP_THRESHOLD}). "
             "Has no effect when --dataset is harmeme or mami. "
             "Raise this value to keep fewer but cleaner MMHS150K images."
+        )
+    )
+    parser.add_argument(
+        "--force_rerun",
+        action="store_true",
+        help=(
+            "Delete the existing manifest and rerun filtering from scratch. "
+            "Useful when you have changed filtering settings (e.g. new CLIP "
+            "thresholds for MMHS150K) and need to regenerate the manifest."
         )
     )
 
@@ -559,46 +515,35 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Stage 0: OCR + CLIP Meme Filter")
-    print(f"  Dataset:  {args.dataset}")
-    print(f"  Images:   {args.images_dir}")
-    print(f"  Manifest: {args.output_manifest}")
-    print(f"  HF cache: {args.hf_cache}")
-    print(f"  Debug:    {args.debug}")
+    print(f"  Dataset:     {args.dataset}")
+    print(f"  Images:      {args.images_dir}")
+    print(f"  Manifest:    {args.output_manifest}")
+    print(f"  HF cache:    {args.hf_cache}")
+    print(f"  Debug:       {args.debug}")
+    print(f"  Force rerun: {args.force_rerun}")
     print(f"{'='*60}\n")
 
     output_path = Path(args.output_manifest)
 
     # ------------------------------------------------------------------
-    # Resume: if manifest already exists, skip filtering and just create
-    # the example folders from the existing results.
+    # Resume check: skip if manifest already exists, unless --force_rerun.
     # ------------------------------------------------------------------
     if output_path.exists():
-        logger.info(f"Manifest already exists at {output_path} — skipping filtering.")
-
-        if args.save_examples:
-            logger.info("Loading existing manifest to create example folders...")
-            results = []
-            with open(output_path, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    row["kept"] = row["kept"].strip().lower() in ("true", "1")
-                    results.append(row)
-
-            kept_count = sum(1 for r in results if r["kept"])
-            logger.info(f"Loaded {len(results)} rows ({kept_count} kept) from manifest.")
-
-            logger.info(f"Saving example images to {args.save_examples} ...")
-            save_example_images(results, args.save_examples, n_examples=args.n_examples)
-            print(f"\nExample folders saved to: {args.save_examples}/")
-            print(f"  kept/       — up to {args.n_examples} images that PASSED the filter")
-            print(f"  discarded/  — up to {args.n_examples} images that FAILED the filter")
+        if args.force_rerun:
+            logger.warning(
+                f"--force_rerun: deleting existing manifest at {output_path} "
+                "and rerunning filtering."
+            )
+            output_path.unlink()
         else:
-            logger.info("No --save_examples path given, nothing to do.")
-
-        return 0
+            logger.info(
+                f"Manifest already exists at {output_path} — skipping filtering. "
+                "Pass --force_rerun to delete it and rerun."
+            )
+            return 0
 
     # ------------------------------------------------------------------
-    # Full run: filter images, write manifest, then create example folders
+    # Full run: filter images and write manifest.
     # ------------------------------------------------------------------
     if args.debug:
         logger.warning("DEBUG MODE ENABLED: Skipping all filters, returning all images as kept")
@@ -628,9 +573,9 @@ def main():
 
     if args.dataset == "mmhs150k":
         fieldnames = (
-            base_fieldnames[:-1]          # everything except "kept"
+            base_fieldnames[:-1]   # everything except "kept"
             + mmhs_extra
-            + ["kept"]                    # "kept" stays last
+            + ["kept"]             # "kept" stays last
         )
     else:
         fieldnames = base_fieldnames
@@ -644,14 +589,6 @@ def main():
 
     # Print summary
     print_summary_table({args.dataset: stats})
-
-    # Save example images
-    if args.save_examples:
-        logger.info(f"Saving example images to {args.save_examples} ...")
-        save_example_images(results, args.save_examples, n_examples=args.n_examples)
-        print(f"\nExample folders saved to: {args.save_examples}/")
-        print(f"  kept/       — up to {args.n_examples} images that PASSED the filter")
-        print(f"  discarded/  — up to {args.n_examples} images that FAILED the filter")
 
     return 0
 
