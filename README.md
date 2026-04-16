@@ -295,7 +295,7 @@ runai logs hmr-sample-filter-examples -p course-ee-559-<username> --follow
 ```
 This produces `/scratch/hmr_data/filtering_results/` with 50 kept and 50 discarded images per dataset. Copy it to your laptop with:
 ```bash
-scp -r <username>@jumphost.rcp.epfl.ch:/scratch/hmr_data/filtering_results/ .
+scp -r <username>@jumphost.rcp.epfl.ch:~/filtering_results/ .
 ```
 
 **Build unified splits** (run after ALL three Stage 0 jobs complete)

@@ -51,7 +51,7 @@ runai submit hmr-sample-filter-examples \
         --harmeme_manifest  /scratch/hmr_data/harmeme/manifest.csv \
         --mami_manifest     /scratch/hmr_data/mami/manifest.csv \
         --mmhs150k_manifest /scratch/hmr_data/mmhs150k/manifest.csv \
-        --output_dir        /scratch/hmr_data/filtering_results \
+        --output_dir        /home/${USERNAME}/filtering_results \
         --n_examples        50
 
 echo "Job submitted."
@@ -59,4 +59,4 @@ echo "Follow logs with:"
 echo "  runai logs hmr-sample-filter-examples -p course-ee-559-${USERNAME} --follow"
 echo ""
 echo "Once complete, copy results to your laptop with:"
-echo "  scp -r ${USERNAME}@jumphost.rcp.epfl.ch:/scratch/hmr_data/filtering_results/ ."
+echo "  scp -r ${USERNAME}@jumphost.rcp.epfl.ch:~/filtering_results/ ."
