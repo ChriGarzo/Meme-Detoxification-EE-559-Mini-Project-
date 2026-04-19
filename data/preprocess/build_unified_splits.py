@@ -184,7 +184,10 @@ def load_mami(data_dir: str) -> List[Dict]:
 
     logger.info(f"MAMI: reading annotations from {ann_file}")
     if ann_file.suffix == ".csv":
-        df = pd.read_csv(ann_file, sep=None, engine="python")
+        try:
+            df = pd.read_csv(ann_file, sep=None, engine="python", quoting=3)  # QUOTE_NONE
+        except Exception:
+            df = pd.read_csv(ann_file, sep="\t", quoting=3, on_bad_lines="skip")
     else:
         df = pd.read_excel(ann_file)
 
