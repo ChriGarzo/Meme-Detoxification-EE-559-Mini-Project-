@@ -24,7 +24,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.explainer import MemeExplainer
-from utils.bertscore_utils import compute_bertscore_batch
+from utils.bertscore_utils import compute_bertscore_batch, create_bertscore_scorer
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,9 @@ def main():
 
     sta_model, sta_tokenizer = load_sta_model(device=device)
 
+    # Load BERTScorer once — reusing it per example avoids reloading the model every call
+    bertscore_scorer = create_bertscore_scorer(device=device)
+
     # Prepare output paths
     explanations_path = os.path.join(args.output_dir, f"{args.dataset}_explanations.jsonl")
     pseudo_rewrites_path = os.path.join(args.output_dir, f"{args.dataset}_pseudo_rewrites.jsonl")
@@ -245,8 +248,8 @@ def main():
                         sta_scores = compute_sta_score([rewrite], sta_model, sta_tokenizer, device)
                         sta_score = 1.0 - sta_scores[0]  # Invert: 1 = non-toxic, 0 = toxic
 
-                        # Compute BERTScore
-                        bertscore = compute_bertscore_batch([original_text], [rewrite])[0]
+                        # Compute BERTScore (scorer pre-loaded — no model reload per call)
+                        bertscore = compute_bertscore_batch([original_text], [rewrite], scorer=bertscore_scorer)[0]
 
                         # Apply quality filter
                         if sta_score > 0.6 and bertscore > 0.4:

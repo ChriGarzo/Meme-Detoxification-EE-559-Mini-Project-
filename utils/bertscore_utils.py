@@ -4,12 +4,48 @@ BERTScore utility wrapper for the hateful meme rewriting pipeline.
 Used in:
   - run_stage1.py: quality filter for pseudo-rewrites (BERTScore > 0.4)
   - train_stage2_phase1.py: optional filter for ParaDetox pairs (BERTScore > 0.5)
+
+For per-example scoring in a loop, use create_bertscore_scorer() to load the
+model once, then pass the scorer to compute_bertscore_batch() to avoid
+reloading weights on every call.
 """
 
 import logging
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def create_bertscore_scorer(
+    model_type: str = "roberta-large",
+    lang: str = "en",
+    rescale_with_baseline: bool = True,
+    device: Optional[str] = None,
+):
+    """
+    Create and return a BERTScorer instance with the model loaded once.
+
+    Use this when scoring many examples one-by-one in a loop to avoid
+    reloading the model on every call. Pass the returned scorer to
+    compute_bertscore_batch() via the `scorer` argument.
+
+    Returns None if bert_score is not installed.
+    """
+    try:
+        from bert_score import BERTScorer
+        import torch
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading BERTScorer ({model_type}) on {device} ...")
+        return BERTScorer(
+            model_type=model_type,
+            lang=lang,
+            rescale_with_baseline=rescale_with_baseline,
+            device=device,
+        )
+    except ImportError:
+        logger.warning("bert_score package not installed. Returning None scorer.")
+        return None
 
 
 def compute_bertscore_batch(
@@ -20,6 +56,7 @@ def compute_bertscore_batch(
     rescale_with_baseline: bool = True,
     batch_size: int = 64,
     device: Optional[str] = None,
+    scorer=None,
 ) -> List[float]:
     """
     Compute BERTScore F1 for a list of (reference, candidate) pairs.
@@ -32,6 +69,8 @@ def compute_bertscore_batch(
         rescale_with_baseline:   Whether to rescale scores with a baseline (recommended)
         batch_size:              Batch size for BERTScore computation
         device:                  Device string ('cuda' / 'cpu'). Auto-detected if None.
+        scorer:                  Pre-loaded BERTScorer instance from create_bertscore_scorer().
+                                 If provided, skips model loading (use this in loops).
 
     Returns:
         List of F1 BERTScore values (one per pair), floats in roughly [0, 1].
@@ -47,15 +86,17 @@ def compute_bertscore_batch(
         return []
 
     try:
-        from bert_score import score as bert_score_fn
-    except ImportError:
-        logger.warning(
-            "bert_score package not installed. Returning dummy scores of 0.5. "
-            "Install with: pip install bert-score"
-        )
-        return [0.5] * len(references)
+        # Use pre-loaded scorer if provided (avoids reloading the model every call)
+        if scorer is not None:
+            _, _, F1 = scorer.score(
+                cands=candidates,
+                refs=references,
+                batch_size=batch_size,
+                verbose=False,
+            )
+            return F1.tolist()
 
-    try:
+        from bert_score import score as bert_score_fn
         import torch
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -72,6 +113,12 @@ def compute_bertscore_batch(
         )
         return F1.tolist()
 
+    except ImportError:
+        logger.warning(
+            "bert_score package not installed. Returning dummy scores of 0.5. "
+            "Install with: pip install bert-score"
+        )
+        return [0.5] * len(references)
     except Exception as e:
         logger.error(f"BERTScore computation failed: {e}")
         return [0.0] * len(references)
