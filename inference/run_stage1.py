@@ -98,6 +98,7 @@ def main():
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
     parser.add_argument("--load_in_4bit", action="store_true", help="Load LLaVA in 4-bit quantization")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for inference")
+    parser.add_argument("--hateful_only", action="store_true", help="Only process examples where hateful=1 (skip non-hateful memes)")
     parser.add_argument("--debug", action="store_true", help="Debug mode: process max 16 examples")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
@@ -136,6 +137,10 @@ def main():
     kept_in_manifest = int(manifest_df["kept"].sum()) if "kept" in manifest_df.columns else total_in_manifest
     logger.info(f"Manifest loaded: {total_in_manifest} total rows, {kept_in_manifest} kept by Stage 0")
     manifest_df = manifest_df[manifest_df["kept"] == True] if "kept" in manifest_df.columns else manifest_df
+    if args.hateful_only and "hateful" in manifest_df.columns:
+        before = len(manifest_df)
+        manifest_df = manifest_df[manifest_df["hateful"] == 1]
+        logger.info(f"--hateful_only: kept {len(manifest_df)}/{before} hateful examples")
     if args.debug:
         manifest_df = manifest_df.head(16)
     logger.info(f"Processing {len(manifest_df)} examples")

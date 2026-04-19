@@ -40,8 +40,8 @@ echo ""
 runai submit hmr-build-stage2-dataset \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
-    --cpu-request 4 \
-    --memory-request 16Gi \
+    --cpu 4 \
+    --memory 16Gi \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \

@@ -41,8 +41,8 @@ runai submit hmr-train-proxy \
     --image ${IMAGE} \
     --node-pools a100-40g \
     --gpu 1 \
-    --cpu-request 8 \
-    --memory-request 40Gi \
+    --cpu 8 \
+    --memory 40Gi \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
