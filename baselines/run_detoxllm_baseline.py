@@ -237,14 +237,15 @@ def main():
     def run_detoxification():
         return baseline.process_batch(texts, batch_size=args.batch_size)
 
-    tracker = EmissionsTracker(log_level="warning")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    tracker = EmissionsTracker(log_level="warning", output_dir=str(args.output_dir), output_file="emissions.csv")
     tracker.start()
     results = run_detoxification()
     co2_emissions = tracker.stop()
-    logger.info(f"CO2 emissions: {co2_emissions:.4f}g")
-
-    # Save outputs
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    if co2_emissions is not None:
+        logger.info(f"CO2 emissions: {co2_emissions:.4f}g")
+    else:
+        logger.warning("CO2 emissions could not be measured")
 
     output_file = args.output_dir / "detoxllm_text_only.jsonl"
 

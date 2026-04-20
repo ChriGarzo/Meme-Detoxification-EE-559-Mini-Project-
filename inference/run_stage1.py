@@ -183,7 +183,7 @@ def main():
     kept_rewrites = 0
     total_pseudo_rewrites = 0
 
-    tracker = EmissionsTracker(log_level="warning")
+    tracker = EmissionsTracker(log_level="warning", output_dir=args.output_dir, output_file="emissions.csv")
     tracker.start()
 
     try:
@@ -313,7 +313,11 @@ def main():
 
     finally:
         emissions = tracker.stop()
-        logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
+        if emissions is not None:
+            logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
+            logger.info(f"Emissions saved to: {os.path.join(args.output_dir, 'emissions.csv')}")
+        else:
+            logger.warning("Carbon emissions could not be measured (CodeCarbon tracking failed)")
 
 
 if __name__ == "__main__":

@@ -276,14 +276,15 @@ def main():
             batch_size=args.batch_size
         )
 
-    tracker = EmissionsTracker(log_level="warning")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    tracker = EmissionsTracker(log_level="warning", output_dir=str(args.output_dir), output_file="emissions.csv")
     tracker.start()
     results = run_rewriting()
     co2_emissions = tracker.stop()
-    logger.info(f"CO2 emissions: {co2_emissions:.4f}g")
-
-    # Save outputs
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    if co2_emissions is not None:
+        logger.info(f"CO2 emissions: {co2_emissions:.4f}g")
+    else:
+        logger.warning("CO2 emissions could not be measured")
 
     system_name = f"llava_{args.mode}"
     output_file = args.output_dir / f"{system_name}.jsonl"

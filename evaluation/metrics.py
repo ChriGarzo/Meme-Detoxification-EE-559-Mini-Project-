@@ -217,9 +217,11 @@ def compute_co2(func: Callable, *args, **kwargs) -> float:
     Returns:
         CO2 emissions in grams
     """
+    import tempfile
     logger.info(f"Measuring CO2 emissions for {func.__name__}")
 
-    tracker = EmissionsTracker(log_level="warning")
+    output_dir = kwargs.pop("_emissions_output_dir", tempfile.mkdtemp())
+    tracker = EmissionsTracker(log_level="warning", output_dir=output_dir, output_file="emissions.csv")
     tracker.start()
 
     try:
@@ -227,7 +229,10 @@ def compute_co2(func: Callable, *args, **kwargs) -> float:
     finally:
         emissions_grams = tracker.stop()
 
-    logger.info(f"CO2 emissions: {emissions_grams:.4f}g")
+    if emissions_grams is not None:
+        logger.info(f"CO2 emissions: {emissions_grams:.4f}g")
+    else:
+        logger.warning("CO2 emissions could not be measured")
     return emissions_grams
 
 

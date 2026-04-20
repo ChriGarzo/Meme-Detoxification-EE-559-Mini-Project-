@@ -196,7 +196,7 @@ def main():
     batch_records = []
     total_processed = 0
 
-    tracker = EmissionsTracker(log_level="warning")
+    tracker = EmissionsTracker(log_level="warning", output_dir=args.output_dir, output_file="emissions.csv")
     tracker.start()
 
     try:
@@ -259,7 +259,10 @@ def main():
 
     finally:
         emissions = tracker.stop()
-        logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
+        if emissions is not None:
+            logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
+        else:
+            logger.warning("CO2 emissions could not be measured")
 
 
 if __name__ == "__main__":
