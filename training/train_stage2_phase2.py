@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import sys
+import inspect
 from pathlib import Path
 from typing import Dict, List, Literal
 
@@ -83,6 +84,11 @@ class MemeRewriteDataset(Dataset):
         self.condition = condition
         self.max_input_length = max_input_length
         self.max_target_length = max_target_length
+        try:
+            tokenizer_call_params = inspect.signature(self.tokenizer.__call__).parameters
+        except (TypeError, ValueError):
+            tokenizer_call_params = {}
+        self._supports_text_target = "text_target" in tokenizer_call_params
 
     def __len__(self):
         return len(self.examples)
@@ -106,7 +112,24 @@ class MemeRewriteDataset(Dataset):
             padding="max_length",
             return_tensors="pt",
         )
-        with self.tokenizer.as_target_tokenizer():
+        if self._supports_text_target:
+            labels = self.tokenizer(
+                text_target=target_text,
+                max_length=self.max_target_length,
+                truncation=True,
+                padding="max_length",
+                return_tensors="pt",
+            )
+        elif hasattr(self.tokenizer, "as_target_tokenizer"):
+            with self.tokenizer.as_target_tokenizer():
+                labels = self.tokenizer(
+                    target_text,
+                    max_length=self.max_target_length,
+                    truncation=True,
+                    padding="max_length",
+                    return_tensors="pt",
+                )
+        else:
             labels = self.tokenizer(
                 target_text,
                 max_length=self.max_target_length,
@@ -219,7 +242,14 @@ def main():
     max_steps   = DEBUG_CONFIG["max_steps"] if debug else -1
     save_steps  = DEBUG_CONFIG["save_steps"] if debug else 200
     eval_steps  = DEBUG_CONFIG["eval_steps"] if debug else 200
-    fp16        = (not debug) and torch.cuda.is_available()
+    use_fp16    = False
+    use_bf16    = False
+    if (not debug) and torch.cuda.is_available():
+        if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+            use_bf16 = True
+        else:
+            use_fp16 = True
+    precision_mode = "bf16" if use_bf16 else ("fp16" if use_fp16 else "fp32")
 
     print(f"\n{'='*60}")
     print(f"  Stage 2 Phase 2: BART Meme Fine-tuning")
@@ -228,7 +258,7 @@ def main():
     print(f"  Epochs:     {num_epochs}")
     print(f"  Batch size: {train_batch}")
     print(f"  LR:         {args.learning_rate}")
-    print(f"  FP16:       {fp16}")
+    print(f"  Precision:  {precision_mode}")
     print(f"  Output:     {args.output_dir}")
     if torch.cuda.is_available():
         print(f"  GPU:        {torch.cuda.get_device_name(0)}")
@@ -236,7 +266,9 @@ def main():
     else:
         print(f"  Device:     CPU (no GPU found)")
     print(f"{'='*60}\n")
-    logger.info(f"Condition: {args.condition} | checkpoint: {checkpoint} | fp16: {fp16}")
+    logger.info(
+        f"Condition: {args.condition} | checkpoint: {checkpoint} | precision: {precision_mode}"
+    )
 
     try:
         from transformers import (
@@ -282,40 +314,53 @@ def main():
     # -----------------------------------------------------------------------
     # Training
     # -----------------------------------------------------------------------
-    training_args = Seq2SeqTrainingArguments(
-        output_dir=args.output_dir,
-        num_train_epochs=num_epochs,
-        max_steps=max_steps,
-        per_device_train_batch_size=train_batch,
-        per_device_eval_batch_size=train_batch,
-        learning_rate=args.learning_rate,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        fp16=fp16,
-        predict_with_generate=True,
-        generation_max_length=128,
-        evaluation_strategy="steps",
-        eval_steps=eval_steps,
-        save_strategy="steps",
-        save_steps=save_steps,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        logging_steps=DEBUG_CONFIG["logging_steps"] if debug else 50,
-        seed=args.seed,
-        report_to="none",
-        save_total_limit=2,
-    )
+    seq2seq_args_params = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
+    eval_strategy_key = "evaluation_strategy" if "evaluation_strategy" in seq2seq_args_params else "eval_strategy"
 
-    trainer = Seq2SeqTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-    )
+    training_kwargs = {
+        "output_dir": args.output_dir,
+        "num_train_epochs": num_epochs,
+        "max_steps": max_steps,
+        "per_device_train_batch_size": train_batch,
+        "per_device_eval_batch_size": train_batch,
+        "learning_rate": args.learning_rate,
+        "warmup_steps": args.warmup_steps,
+        "weight_decay": args.weight_decay,
+        "predict_with_generate": True,
+        "generation_max_length": 128,
+        "eval_steps": eval_steps,
+        "save_strategy": "steps",
+        "save_steps": save_steps,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "eval_loss",
+        "greater_is_better": False,
+        "logging_steps": DEBUG_CONFIG["logging_steps"] if debug else 50,
+        "seed": args.seed,
+        "report_to": "none",
+        "save_total_limit": 2,
+    }
+    if "fp16" in seq2seq_args_params:
+        training_kwargs["fp16"] = use_fp16
+    if "bf16" in seq2seq_args_params:
+        training_kwargs["bf16"] = use_bf16
+    training_kwargs[eval_strategy_key] = "steps"
+    training_args = Seq2SeqTrainingArguments(**training_kwargs)
+
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_dataset,
+        "eval_dataset": val_dataset,
+        "data_collator": data_collator,
+        "compute_metrics": compute_metrics,
+    }
+    trainer_init_params = inspect.signature(Seq2SeqTrainer.__init__).parameters
+    if "tokenizer" in trainer_init_params:
+        trainer_kwargs["tokenizer"] = tokenizer
+    elif "processing_class" in trainer_init_params:
+        trainer_kwargs["processing_class"] = tokenizer
+
+    trainer = Seq2SeqTrainer(**trainer_kwargs)
 
     steps_per_epoch = len(train_dataset) // train_batch
     total_steps = steps_per_epoch * num_epochs

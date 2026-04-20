@@ -46,9 +46,10 @@ echo "  Image:      ${IMAGE}"
 echo ""
 
 for CONDITION in "${CONDITIONS[@]}"; do
+    SAFE_CONDITION="${CONDITION//_/-}"
     echo "Submitting Stage 2 Phase 2 for condition: ${CONDITION}"
 
-    runai submit hmr-stage2-phase2-${CONDITION} \
+    runai submit hmr-stage2-phase2-${SAFE_CONDITION} \
         --run-as-uid ${UID_NUM} \
         --image ${IMAGE} \
         --node-pools a100-40g \

@@ -120,6 +120,7 @@ class ExplanationProxyTrainer:
         self,
         images: List,
         texts: List[str],
+        batch_size: int = 16,
     ) -> torch.Tensor:
         """
         Extract and concatenate CLIP image + text embeddings.
@@ -131,40 +132,55 @@ class ExplanationProxyTrainer:
         Returns:
             Tensor of shape [N, 1536] with concatenated embeddings
         """
-        # Handle image paths
-        processed_images = []
-        for img in images:
-            if isinstance(img, str):
-                from PIL import Image
+        if len(images) != len(texts):
+            raise ValueError(
+                f"images and texts must have same length, got {len(images)} vs {len(texts)}"
+            )
 
-                img = Image.open(img).convert("RGB")
-            processed_images.append(img)
+        all_features = []
 
-        # Process with CLIP
-        inputs = self.clip_processor(
-            images=processed_images,
-            text=texts,
-            return_tensors="pt",
-            padding=True,
-        )
+        for start in range(0, len(images), batch_size):
+            end = min(start + batch_size, len(images))
+            batch_images = images[start:end]
+            batch_texts = texts[start:end]
 
-        # Move to device
-        for key in inputs:
-            if isinstance(inputs[key], torch.Tensor):
-                inputs[key] = inputs[key].to(self.device)
+            processed_images = []
+            for img in batch_images:
+                if isinstance(img, str):
+                    from PIL import Image
 
-        with torch.no_grad():
-            outputs = self.clip_model(**inputs)
-            # clip-vit-large-patch14 → 768-dim each → 1536 concatenated
-            image_embeds = outputs.image_embeds  # [N, 768]
-            text_embeds = outputs.text_embeds    # [N, 768]
+                    with Image.open(img) as pil_img:
+                        processed_images.append(pil_img.convert("RGB"))
+                else:
+                    processed_images.append(img)
 
-        # Concatenate → [N, 1536]  (matches ExplanationProxy input dim)
-        combined = torch.cat(
-            [image_embeds, text_embeds], dim=1
-        )  # [N, 1536]
+            # CLIP text encoder supports up to 77 tokens; truncate long meme text.
+            inputs = self.clip_processor(
+                images=processed_images,
+                text=batch_texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=77,
+            )
 
-        return combined
+            for key in inputs:
+                if isinstance(inputs[key], torch.Tensor):
+                    inputs[key] = inputs[key].to(self.device)
+
+            with torch.no_grad():
+                outputs = self.clip_model(**inputs)
+                image_embeds = outputs.image_embeds  # [B, 768]
+                text_embeds = outputs.text_embeds    # [B, 768]
+                combined = torch.cat([image_embeds, text_embeds], dim=1)  # [B, 1536]
+
+            # Keep extracted features on CPU as float32 to reduce peak GPU memory
+            # and avoid dtype mismatches during proxy training.
+            all_features.append(combined.detach().float().cpu())
+
+            del inputs, outputs, image_embeds, text_embeds, combined
+
+        return torch.cat(all_features, dim=0)
 
     def extract_bart_targets(
         self,
@@ -203,7 +219,8 @@ class ExplanationProxyTrainer:
             hidden_states.append(h)
 
         # Stack along batch dimension: [N, 1, hidden_size] -> [N, hidden_size]
-        targets = torch.cat(hidden_states, dim=0)
+        # and normalize to float32 on CPU for stable MSE training.
+        targets = torch.cat(hidden_states, dim=0).detach().float().cpu()
 
         return targets
 
@@ -247,7 +264,8 @@ class ExplanationProxyTrainer:
             Dictionary with training history (loss curves)
         """
         logger.info("Extracting training features...")
-        train_features = self.extract_clip_features(images, texts)
+        clip_batch_size = min(max(batch_size, 1), 16)
+        train_features = self.extract_clip_features(images, texts, batch_size=clip_batch_size)
         train_targets = self.extract_bart_targets(
             texts, target_groups, attack_types, implicit_meanings
         )
@@ -265,7 +283,7 @@ class ExplanationProxyTrainer:
 
         if has_val:
             logger.info("Extracting validation features...")
-            val_features = self.extract_clip_features(val_images, val_texts)
+            val_features = self.extract_clip_features(val_images, val_texts, batch_size=clip_batch_size)
             val_targets = self.extract_bart_targets(
                 val_texts, val_target_groups, val_attack_types, val_implicit_meanings
             )
@@ -365,7 +383,7 @@ class ExplanationProxyTrainer:
             Dictionary with evaluation metrics
         """
         logger.info("Extracting evaluation features...")
-        features = self.extract_clip_features(images, texts)
+        features = self.extract_clip_features(images, texts, batch_size=16)
         targets = self.extract_bart_targets(
             texts, target_groups, attack_types, implicit_meanings
         )

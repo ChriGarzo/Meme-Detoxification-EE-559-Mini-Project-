@@ -39,7 +39,45 @@ logger = logging.getLogger(__name__)
 # Data loading helpers
 # ---------------------------------------------------------------------------
 
-def load_stage2_dataset(dataset_dir: str, debug: bool) -> tuple:
+def _build_stage1_image_index(stage1_output_dir: str) -> Dict[str, str]:
+    """Build an index from Stage 1 outputs: "dataset::id" -> image_path."""
+    root = Path(stage1_output_dir)
+    if not root.exists():
+        logger.warning(f"Stage 1 output dir not found: {root}")
+        return {}
+
+    image_index: Dict[str, str] = {}
+    files = sorted(root.rglob("*_pseudo_rewrites.jsonl"))
+    if not files:
+        logger.warning(f"No *_pseudo_rewrites.jsonl files found under {root}")
+        return {}
+
+    for path in files:
+        dataset_name = path.stem.replace("_pseudo_rewrites", "")
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                ex_id = rec.get("id")
+                img = rec.get("image_path")
+                if not ex_id or not img:
+                    continue
+
+                # Prefer dataset-scoped key to avoid collisions across datasets.
+                image_index[f"{dataset_name}::{ex_id}"] = img
+                # Keep an id-only fallback for compatibility with older records.
+                image_index.setdefault(str(ex_id), img)
+
+    logger.info(f"Indexed {len(image_index)} stage1 image references")
+    return image_index
+
+def load_stage2_dataset(stage1_output_dir: str, dataset_dir: str, debug: bool) -> tuple:
     """Load stage2 train/val JSONL produced by build_stage2_dataset.py."""
     if debug:
         raw = make_debug_dataset(n=DEBUG_CONFIG["max_samples"])
@@ -70,6 +108,49 @@ def load_stage2_dataset(dataset_dir: str, debug: bool) -> tuple:
 
     train = _load(train_path)
     val   = _load(val_path) if val_path.exists() else train[:max(1, len(train) // 10)]
+
+    stage1_index = _build_stage1_image_index(stage1_output_dir)
+
+    def _attach_image_path(examples: List[Dict], split_name: str) -> List[Dict]:
+        enriched = []
+        missing = 0
+        for ex in examples:
+            if ex.get("image_path"):
+                enriched.append(ex)
+                continue
+
+            ex_id = ex.get("id")
+            dataset = ex.get("dataset")
+            scoped_key = f"{dataset}::{ex_id}" if dataset and ex_id else None
+
+            image_path = None
+            if scoped_key:
+                image_path = stage1_index.get(scoped_key)
+            if image_path is None and ex_id is not None:
+                image_path = stage1_index.get(str(ex_id))
+
+            if image_path:
+                ex["image_path"] = image_path
+                enriched.append(ex)
+            else:
+                missing += 1
+
+        if missing:
+            logger.warning(
+                f"{split_name}: dropped {missing} examples without image_path after Stage 1 lookup"
+            )
+        return enriched
+
+    train = _attach_image_path(train, "train")
+    val = _attach_image_path(val, "val")
+
+    if not train:
+        logger.error("No train examples with valid image_path were found for proxy training")
+        sys.exit(1)
+    if not val:
+        logger.error("No val examples with valid image_path were found for proxy training")
+        sys.exit(1)
+
     logger.info(f"Loaded {len(train)} train, {len(val)} val examples for proxy training")
     return train, val
 
@@ -127,7 +208,11 @@ def main():
     # -----------------------------------------------------------------------
     # Data
     # -----------------------------------------------------------------------
-    train_examples, val_examples = load_stage2_dataset(args.stage2_dataset_dir, debug)
+    train_examples, val_examples = load_stage2_dataset(
+        args.stage1_output_dir,
+        args.stage2_dataset_dir,
+        debug,
+    )
 
     if debug:
         num_epochs  = DEBUG_CONFIG["proxy_epochs"]

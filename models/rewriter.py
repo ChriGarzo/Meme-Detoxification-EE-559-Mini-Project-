@@ -278,7 +278,19 @@ class MemeRewriter:
         ).to(self.device)
 
         with torch.no_grad():
-            encoder_outputs = self.model.encoder(
+            # Transformers versions expose the encoder through different attributes.
+            if hasattr(self.model, "get_encoder"):
+                encoder = self.model.get_encoder()
+            elif hasattr(self.model, "encoder"):
+                encoder = self.model.encoder
+            elif hasattr(self.model, "model") and hasattr(self.model.model, "encoder"):
+                encoder = self.model.model.encoder
+            else:
+                raise AttributeError(
+                    f"Could not find encoder on model type {type(self.model).__name__}"
+                )
+
+            encoder_outputs = encoder(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
