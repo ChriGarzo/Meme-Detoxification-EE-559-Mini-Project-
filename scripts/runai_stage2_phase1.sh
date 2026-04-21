@@ -50,10 +50,10 @@ runai submit hmr-stage2-phase1 \
     --command -- python3 /home/${USERNAME}/hateful_meme_rewriting/training/train_stage2_phase1.py \
         --output_dir /scratch/hmr_stage2_phase1_checkpoint \
         --hf_cache /scratch/hf_cache \
-        --num_train_epochs 2 \
+        --num_train_epochs 3 \
         --per_device_train_batch_size 16 \
-        --learning_rate 5e-5 \
-        --warmup_steps 500 \
+        --learning_rate 3e-5 \
+        --warmup_steps 150 \
         --weight_decay 0.01 \
         --seed 42
 

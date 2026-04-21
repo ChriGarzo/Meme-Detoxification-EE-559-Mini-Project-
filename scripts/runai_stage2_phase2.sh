@@ -66,11 +66,12 @@ for CONDITION in "${CONDITIONS[@]}"; do
             --dataset_dir /scratch/hmr_stage2_dataset \
             --output_dir /scratch/hmr_stage2_phase2_${CONDITION}_checkpoint \
             --hf_cache /scratch/hf_cache \
-            --num_train_epochs 3 \
+            --num_train_epochs 5 \
             --per_device_train_batch_size 8 \
             --learning_rate 2e-5 \
-            --warmup_steps 100 \
+            --warmup_steps 50 \
             --weight_decay 0.01 \
+            --label_smoothing_factor 0.1 \
             --seed 42
 done
 

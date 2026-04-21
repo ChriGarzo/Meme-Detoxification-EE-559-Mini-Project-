@@ -165,10 +165,10 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 2 Phase 1: BART ParaDetox warm-up")
     parser.add_argument("--output_dir",                  type=str, required=True)
     parser.add_argument("--hf_cache",                    type=str, default=None)
-    parser.add_argument("--num_train_epochs",            type=int, default=2)
+    parser.add_argument("--num_train_epochs",            type=int, default=3)
     parser.add_argument("--per_device_train_batch_size", type=int, default=16)
-    parser.add_argument("--learning_rate",               type=float, default=5e-5)
-    parser.add_argument("--warmup_steps",                type=int, default=500)
+    parser.add_argument("--learning_rate",               type=float, default=3e-5)
+    parser.add_argument("--warmup_steps",                type=int, default=150)
     parser.add_argument("--weight_decay",                type=float, default=0.01)
     parser.add_argument("--seed",                        type=int, default=42)
     parser.add_argument("--debug", action="store_true",
@@ -286,7 +286,7 @@ def main():
         "load_best_model_at_end": True,
         "metric_for_best_model": "rougeL",
         "greater_is_better": True,
-        "logging_steps": DEBUG_CONFIG["logging_steps"] if debug else 50,
+        "logging_steps": DEBUG_CONFIG["logging_steps"] if debug else 25,
         "seed": args.seed,
         "report_to": "none",
         "save_total_limit": 2,
