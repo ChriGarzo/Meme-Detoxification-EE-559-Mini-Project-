@@ -71,10 +71,10 @@ def build_condition_prompt(
     Build BART encoder input string based on ablation condition.
 
     Format mirrors MemeRewriter.format_input (models/rewriter.py):
-      full:        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] </s> {text}
-      target_only: [T: <target_group>] [A: null] [M: null] </s> {text}
-      attack_only: [T: null] [A: <attack_type>] [M: null] </s> {text}
-      none:        [T: null] [A: null] [M: null] </s> {text}
+      full:        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] | {text}
+      target_only: [T: <target_group>] [A: null] [M: null] | {text}
+      attack_only: [T: null] [A: <attack_type>] [M: null] | {text}
+      none:        [T: null] [A: null] [M: null] | {text}
 
     Null fields are rendered as the literal string "null" (not Python None).
     """
@@ -92,7 +92,7 @@ def build_condition_prompt(
     else:  # 'none'
         prefix = "[T: null] [A: null] [M: null]"
 
-    return f"{prefix} </s> {original_text}"
+    return f"{prefix} | {original_text}"
 
 
 def main():

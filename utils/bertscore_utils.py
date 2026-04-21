@@ -3,7 +3,6 @@ BERTScore utility wrapper for the hateful meme rewriting pipeline.
 
 Used in:
   - run_stage1.py: quality filter for pseudo-rewrites (BERTScore > 0.4)
-  - train_stage2_phase1.py: optional filter for ParaDetox pairs (BERTScore > 0.5)
 
 For per-example scoring in a loop, use create_bertscore_scorer() to load the
 model once, then pass the scorer to compute_bertscore_batch() to avoid

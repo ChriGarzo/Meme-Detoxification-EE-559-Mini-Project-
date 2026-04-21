@@ -2,7 +2,7 @@
 
 **EE-559 Deep Learning — EPFL, Group 31**
 
-A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured hate explanations and pseudo-rewrites, then trains BART-large (400M) as a lightweight student for meme text detoxification. Four conditioning ablations are evaluated: `full`, `target_only`, `attack_only`, `none`.
+A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured hate explanations and pseudo-rewrites, then fine-tunes BART-large (400M) directly as a lightweight student for meme text detoxification. Four conditioning ablations are evaluated: `full`, `target_only`, `attack_only`, `none`.
 
 ---
 
@@ -29,13 +29,13 @@ Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites  [GPU]
                │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
                │  Input format: [T: {target}] [A: {attack}] [M: {meaning}] </s> {text}
                ▼
-Stage 2 Ph1 ── BART ParaDetox warm-up  [GPU]
-               │  Seq2SeqTrainer on s-nlp/paradetox
-               │  2 epochs, lr=5e-5, warmup=500
-               ▼
-Stage 2 Ph2 ── BART meme fine-tuning (×4 conditions in parallel)  [GPU]
+Stage 2 ───── BART meme fine-tuning (×4 conditions in parallel)  [GPU]
                │  Conditions: full | target_only | attack_only | none
-               │  3 epochs, lr=2e-5, starts from Phase 1 checkpoint
+               │  5 epochs, lr=2e-5, starts directly from facebook/bart-large
+               │  Note: a ParaDetox warm-up phase (Phase 1) was originally
+               │  included but was found to cause degenerate autoregressive
+               │  generation at inference time (teacher-forcing overfitting),
+               │  and has been removed from the main pipeline.
                ▼
 Stage 4 ──── Proxy network training  [GPU]
                │  3-layer MLP: concat(CLIP image + CLIP text) [1536-dim]
@@ -70,8 +70,7 @@ hateful_meme_rewriting/
 │       ├── filter_meme_images.py      ← Stage 0: OCR + CLIP filter (per dataset)
 │       ├── sample_filter_examples.py  ← visual QC: samples 50 kept/discarded per dataset
 │       ├── build_unified_splits.py    ← builds 80/10/10 splits from Stage 0 manifests
-│       ├── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val JSONL
-│       └── rule_based_labels.py
+│       └── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val JSONL
 │
 ├── models/
 │   ├── explainer.py                   ← LLaVA-Next wrapper
@@ -84,8 +83,7 @@ hateful_meme_rewriting/
 │   └── run_proxy_pipeline.py          ← VLM-free inference via proxy
 │
 ├── training/
-│   ├── train_stage2_phase1.py         ← ParaDetox warm-up (Seq2SeqTrainer)
-│   ├── train_stage2_phase2.py         ← Meme fine-tuning (×4 conditions)
+│   ├── train_stage2_phase2.py         ← Meme fine-tuning (×4 conditions, starts from bart-large directly)
 │   └── train_proxy.py                 ← Proxy MLP training
 │
 ├── evaluation/
@@ -116,7 +114,6 @@ hateful_meme_rewriting/
     ├── runai_build_unified_splits.sh  ← builds unified splits after Stage 0
     ├── runai_stage1_explain.sh
     ├── runai_build_stage2_dataset.sh
-    ├── runai_stage2_phase1.sh
     ├── runai_stage2_phase2.sh
     ├── runai_train_proxy.sh
     └── runai_evaluate.sh
@@ -154,7 +151,7 @@ Manual request required: https://forms.gle/AGWMiGicBHiQx4q98
 Download from: https://gombru.github.io/2019/10/09/MMHS/
 
 ### ParaDetox
-Downloaded automatically from HuggingFace by `train_stage2_phase1.py` at training time (`s-nlp/paradetox`). No manual step needed.
+`s-nlp/paradetox` is loaded automatically at training time by `train_stage2_phase2.py` (via the `--paradetox_mix_ratio` flag) and mixed into the training data as a detoxification prior. No manual download is needed — it is fetched from HuggingFace into the shared `/scratch/hf_cache`.
 
 ---
 
@@ -315,16 +312,11 @@ bash scripts/runai_stage1_explain.sh <UID>
 bash scripts/runai_build_stage2_dataset.sh <UID>
 ```
 
-**Stage 2 Phase 1 — BART ParaDetox warm-up**
-```bash
-bash scripts/runai_stage2_phase1.sh <UID>
-```
-
-**Stage 2 Phase 2 — BART meme fine-tuning** (4 jobs submitted in parallel, one per condition)
+**Stage 2 — BART meme fine-tuning** (4 jobs submitted in parallel, one per condition)
 ```bash
 bash scripts/runai_stage2_phase2.sh <UID>
 ```
-Trains four separate checkpoints: `full`, `target_only`, `attack_only`, `none`.
+Trains four separate checkpoints starting directly from `facebook/bart-large`: `full`, `target_only`, `attack_only`, `none`.
 
 **Stage 4 — Train proxy network** (wait for Stage 2 Phase 2 `full` to complete)
 ```bash
@@ -373,7 +365,6 @@ bash scripts/runai_evaluate.sh <UID>
 ├── hmr_stage2_dataset/
 │   ├── train.jsonl
 │   └── val.jsonl
-├── hmr_stage2_phase1_checkpoint/
 ├── hmr_stage2_phase2_full_checkpoint/
 ├── hmr_stage2_phase2_target_only_checkpoint/
 ├── hmr_stage2_phase2_attack_only_checkpoint/

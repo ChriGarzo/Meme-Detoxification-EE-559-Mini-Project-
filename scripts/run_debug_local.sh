@@ -26,25 +26,22 @@ python3 data/preprocess/build_stage2_dataset.py \
     --output_dir outputs/debug_run/stage2_dataset \
     --debug
 
-echo "=== [DEBUG] Step 4: Train Stage 2 Phase 1 (ParaDetox warm-up) ==="
-python3 training/train_stage2_phase1.py --debug
-
-echo "=== [DEBUG] Step 5: Train Stage 2 Phase 2 (full conditioning) ==="
+echo "=== [DEBUG] Step 4: Train Stage 2 (full conditioning, with ParaDetox mixing) ==="
 python3 training/train_stage2_phase2.py --condition full --debug
 
-echo "=== [DEBUG] Step 6: Run Stage 2 inference ==="
+echo "=== [DEBUG] Step 5: Run Stage 2 inference ==="
 python3 inference/run_stage2.py --condition full --debug
 
-echo "=== [DEBUG] Step 7: Train proxy network ==="
+echo "=== [DEBUG] Step 6: Train proxy network ==="
 python3 training/train_proxy.py --debug
 
-echo "=== [DEBUG] Step 8: Run proxy pipeline inference (no LLaVA) ==="
+echo "=== [DEBUG] Step 7: Run proxy pipeline inference (no LLaVA) ==="
 python3 inference/run_proxy_pipeline.py --debug
 
-echo "=== [DEBUG] Step 9: Run LLaVA baseline ==="
+echo "=== [DEBUG] Step 8: Run LLaVA baseline ==="
 python3 baselines/run_llava_baseline.py --mode end_to_end --debug
 
-echo "=== [DEBUG] Step 10: Evaluate (all systems including proxy) ==="
+echo "=== [DEBUG] Step 9: Evaluate (all systems including proxy) ==="
 python3 evaluation/evaluate.py --debug
 
 echo ""

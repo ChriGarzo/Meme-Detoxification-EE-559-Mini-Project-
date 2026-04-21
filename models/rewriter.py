@@ -127,7 +127,7 @@ class MemeRewriter:
             at = "null"
             im = "null"
 
-        return f"[T: {tg}] [A: {at}] [M: {im}] </s> {text}"
+        return f"[T: {tg}] [A: {at}] [M: {im}] | {text}"
 
     def rewrite(
         self,
@@ -311,7 +311,7 @@ class MemeRewriter:
         Generate rewrites from pre-formatted input strings.
 
         Use this when the caller has already built the full BART encoder string
-        (e.g. '[T: ...] [A: ...] [M: ...] </s> {text}') and does NOT want
+        (e.g. '[T: ...] [A: ...] [M: ...] | {text}') and does NOT want
         format_input() to be applied again.
 
         Args:

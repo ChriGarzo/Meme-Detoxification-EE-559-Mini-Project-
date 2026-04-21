@@ -5,7 +5,7 @@ This script:
 1. Reads Stage 1 JSONL outputs (explanations + pseudo_rewrites)
 2. Combines all datasets into training/validation splits (90/10)
 3. Filters by BERTScore > 0.4
-4. Creates prefixed input format: [T: ...] [A: ...] [M: ...] </s> {text}
+4. Creates prefixed input format: [T: ...] [A: ...] [M: ...] | {text}
 5. Outputs train.jsonl and val.jsonl with standardized fields
 """
 
@@ -155,7 +155,7 @@ def create_input_format(
     """
     Create prefixed BART encoder input (full conditioning format):
 
-        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] </s> <meme_text>
+        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] | <meme_text>
 
     Null fields are rendered as the literal string "null".
     This matches MemeRewriter.format_input(condition="full") in models/rewriter.py.
@@ -172,7 +172,7 @@ def create_input_format(
     tg = target_group or "null"
     at = attack_type or "null"
     im = implicit_meaning or "null"
-    return f"[T: {tg}] [A: {at}] [M: {im}] </s> {meme_text}"
+    return f"[T: {tg}] [A: {at}] [M: {im}] | {meme_text}"
 
 
 def build_training_data(examples: List[Dict]) -> List[Dict]:

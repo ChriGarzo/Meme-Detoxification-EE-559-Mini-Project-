@@ -2,7 +2,7 @@
 set -e
 
 # =============================================================================
-# Stage 2 Phase 2: BART conditioning fine-tune, all 4 conditions (GPU A100-40G)
+# Stage 2: BART conditioning fine-tune, all 4 conditions (GPU A100-40G)
 #
 # Usage: bash scripts/runai_stage2_phase2.sh <UID_NUMBER>
 #
@@ -11,13 +11,18 @@ set -e
 # Example:
 #   bash scripts/runai_stage2_phase2.sh 123456
 #
-# Note: Run this AFTER runai_stage2_phase1.sh has completed.
+# Note: Run this AFTER runai_build_stage2_dataset.sh has completed.
 #       Submits 4 jobs (one per conditioning condition).
 #       Conditions: full | target_only | attack_only | none
 #         full        — uses all explanation fields: target_group + attack_type + implicit_meaning
 #         target_only — uses only the target_group field
 #         attack_only — uses only the attack_type field
 #         none        — no explanation conditioning (text-only baseline)
+#
+#       ParaDetox mixing: 20% of each training set is drawn from
+#       s-nlp/paradetox (clean toxic→neutral pairs) to provide a
+#       detoxification prior without a separate warm-up phase.
+#       Set --paradetox_mix_ratio 0.0 to disable.
 # =============================================================================
 
 # --- Validate args ---
@@ -38,7 +43,7 @@ IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 # Ablation conditions (must match MemeRewriter.format_input and run_stage2.py)
 CONDITIONS=("full" "target_only" "attack_only" "none")
 
-echo "=== Stage 2 Phase 2: BART Conditioning Fine-tune ==="
+echo "=== Stage 2: BART Conditioning Fine-tune (with ParaDetox mixing) ==="
 echo "  User:       ${USERNAME} (UID: ${UID_NUM})"
 echo "  Group:      ${GROUP_NUM}"
 echo "  Conditions: ${CONDITIONS[*]}"
@@ -47,7 +52,7 @@ echo ""
 
 for CONDITION in "${CONDITIONS[@]}"; do
     SAFE_CONDITION="${CONDITION//_/-}"
-    echo "Submitting Stage 2 Phase 2 for condition: ${CONDITION}"
+    echo "Submitting Stage 2 for condition: ${CONDITION}"
 
     runai submit hmr-stage2-phase2-${SAFE_CONDITION} \
         --run-as-uid ${UID_NUM} \
@@ -62,7 +67,6 @@ for CONDITION in "${CONDITIONS[@]}"; do
         --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
         --command -- python3 /home/${USERNAME}/hateful_meme_rewriting/training/train_stage2_phase2.py \
             --condition ${CONDITION} \
-            --phase1_checkpoint_dir /scratch/hmr_stage2_phase1_checkpoint \
             --dataset_dir /scratch/hmr_stage2_dataset \
             --output_dir /scratch/hmr_stage2_phase2_${CONDITION}_checkpoint \
             --hf_cache /scratch/hf_cache \
@@ -71,8 +75,9 @@ for CONDITION in "${CONDITIONS[@]}"; do
             --learning_rate 2e-5 \
             --warmup_steps 50 \
             --weight_decay 0.01 \
+            --paradetox_mix_ratio 0.2 \
             --seed 42
 done
 
 echo ""
-echo "All Stage 2 Phase 2 jobs submitted."
+echo "All Stage 2 jobs submitted."
