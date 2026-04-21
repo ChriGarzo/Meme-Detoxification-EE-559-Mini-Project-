@@ -62,6 +62,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -437,8 +438,13 @@ def main():
         if isinstance(preds, tuple):
             preds = preds[0]
 
+        # Sanitize preds: replace any out-of-range or negative values (pad
+        # placeholders inserted by the Seq2SeqTrainer) with pad_token_id so
+        # the tokenizer C-extension doesn't overflow on int conversion.
+        preds  = np.where((preds  >= 0) & (preds  < tokenizer.vocab_size), preds,  tokenizer.pad_token_id)
+        labels = np.where((labels >= 0) & (labels < tokenizer.vocab_size), labels, tokenizer.pad_token_id)
+
         decoded_preds  = tokenizer.batch_decode(preds,  skip_special_tokens=True)
-        labels[labels == -100] = tokenizer.pad_token_id
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
         result  = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
