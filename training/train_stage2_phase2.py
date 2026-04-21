@@ -217,7 +217,6 @@ def main():
     parser.add_argument("--per_device_train_batch_size", type=int,   default=8)
     parser.add_argument("--learning_rate",               type=float, default=2e-5)
     parser.add_argument("--warmup_steps",                type=int,   default=50)
-    parser.add_argument("--label_smoothing_factor",      type=float, default=0.1)
     parser.add_argument("--weight_decay",                type=float, default=0.01)
     parser.add_argument("--seed",                        type=int,   default=42)
     parser.add_argument("--debug", action="store_true")
@@ -341,6 +340,10 @@ def main():
         # STA — is the model actually generating non-toxic text?
         metrics["sta"] = compute_sta_score(decoded_preds)
         logger.info(f"  eval STA: {metrics['sta']:.4f}  (rougeL: {metrics.get('rougeL', 0):.4f})")
+        # Sample outputs — helps diagnose generation quality
+        for i in range(min(2, len(decoded_preds))):
+            logger.info(f"  [sample {i+1}] INPUT REF: {decoded_labels[i][:80]}")
+            logger.info(f"  [sample {i+1}] GENERATED: {decoded_preds[i][:80]}")
         return metrics
 
     # -----------------------------------------------------------------------
@@ -360,7 +363,7 @@ def main():
         "weight_decay": args.weight_decay,
         "predict_with_generate": True,
         "generation_max_length": 128,
-        "label_smoothing_factor": args.label_smoothing_factor,
+        "generation_num_beams": 4,
         "eval_steps": eval_steps,
         "save_strategy": "steps",
         "save_steps": save_steps,

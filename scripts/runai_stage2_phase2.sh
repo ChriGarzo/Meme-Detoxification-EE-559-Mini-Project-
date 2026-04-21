@@ -71,7 +71,6 @@ for CONDITION in "${CONDITIONS[@]}"; do
             --learning_rate 2e-5 \
             --warmup_steps 50 \
             --weight_decay 0.01 \
-            --label_smoothing_factor 0.1 \
             --seed 42
 done
 
