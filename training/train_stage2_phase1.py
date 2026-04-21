@@ -367,7 +367,6 @@ def main():
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id,
         bos_token_id=tokenizer.bos_token_id,
-        max_new_tokens=64,
         num_beams=4,
         early_stopping=True,
         no_repeat_ngram_size=3,

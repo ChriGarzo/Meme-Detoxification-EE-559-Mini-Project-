@@ -60,8 +60,8 @@ runai submit hmr-stage2-phase1 \
         --hf_cache        /scratch/hf_cache \
         --num_train_epochs            3 \
         --per_device_train_batch_size 16 \
-        --learning_rate   3e-5 \
-        --warmup_steps    500 \
+        --learning_rate   1e-5 \
+        --warmup_steps    1000 \
         --weight_decay    0.01 \
         --bertscore_min   0.5 \
         --seed            42
