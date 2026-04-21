@@ -330,9 +330,35 @@ def main():
     write_jsonl(train_data, str(train_path))
     write_jsonl(val_data, str(val_path))
 
-    # Dataset source breakdown
+    # Dataset statistics
     from collections import Counter
-    dataset_counts = Counter(e.get("dataset", "unknown") for e in training_data)
+    dataset_counts     = Counter(e.get("dataset",      "unknown") for e in training_data)
+    target_group_counts = Counter(e.get("target_group", "null")   for e in training_data)
+    attack_type_counts  = Counter(e.get("attack_type",  "null")   for e in training_data)
+
+    # Save dataset_statistics.json — persists all key distribution info for the report
+    stats = {
+        "build_config": {
+            "stage1_dir": args.stage1_dir,
+            "bertscore_threshold": 0.4,
+            "train_val_ratio": 0.9,
+            "seed": 42,
+            "debug": args.debug,
+        },
+        "counts": {
+            "total_loaded_from_stage1": len(examples),
+            "after_bertscore_filter": len(training_data),
+            "train_samples": len(train_data),
+            "val_samples": len(val_data),
+        },
+        "dataset_source_distribution": dict(dataset_counts.most_common()),
+        "target_group_distribution": dict(target_group_counts.most_common()),
+        "attack_type_distribution": dict(attack_type_counts.most_common()),
+    }
+    stats_path = output_dir / "dataset_statistics.json"
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2)
+    logger.info(f"Dataset statistics saved to {stats_path}")
 
     # Print summary
     print("\n" + "=" * 80)
@@ -345,9 +371,16 @@ def main():
     print(f"\nBreakdown by source dataset:")
     for ds, count in sorted(dataset_counts.items()):
         print(f"  {ds:<20} {count:>6} examples")
+    print(f"\nBreakdown by target group:")
+    for tg, count in target_group_counts.most_common():
+        print(f"  {tg:<25} {count:>6} examples")
+    print(f"\nBreakdown by attack type:")
+    for at, count in attack_type_counts.most_common():
+        print(f"  {at:<25} {count:>6} examples")
     print(f"\nOutput directory: {output_dir}")
-    print(f"  train.jsonl: {len(train_data)} examples")
-    print(f"  val.jsonl:   {len(val_data)} examples")
+    print(f"  train.jsonl:            {len(train_data)} examples")
+    print(f"  val.jsonl:              {len(val_data)} examples")
+    print(f"  dataset_statistics.json saved")
     if training_data:
         ex = training_data[0]
         print(f"\nExample input format:")

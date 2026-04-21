@@ -28,6 +28,7 @@ import logging
 import os
 import sys
 import inspect
+import time
 from pathlib import Path
 from typing import Dict, List, Literal
 
@@ -368,13 +369,64 @@ def main():
     logger.info(f"Steps:   {steps_per_epoch} per epoch × {num_epochs} epochs = {total_steps} total")
 
     logger.info(f"Starting Phase 2 training (condition={args.condition})...")
+    t0 = time.time()
     trainer.train()
+    training_duration = time.time() - t0
+
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     logger.info(f"Phase 2 ({args.condition}) checkpoint saved to {args.output_dir}")
+
+    # ------------------------------------------------------------------
+    # Save training history for the final report
+    # trainer.state.log_history contains every logged event:
+    #   - training steps: {"loss": ..., "learning_rate": ..., "epoch": ..., "step": ...}
+    #   - eval steps:     {"eval_loss": ..., "eval_rouge1": ..., "eval_rougeL": ..., ...}
+    # ------------------------------------------------------------------
+    history_data = {
+        "phase": "phase2_meme_finetune",
+        "condition": args.condition,
+        "run_config": {
+            "phase1_checkpoint": args.phase1_checkpoint_dir,
+            "condition": args.condition,
+            "num_epochs": num_epochs,
+            "batch_size": train_batch,
+            "learning_rate": args.learning_rate,
+            "warmup_steps": args.warmup_steps,
+            "weight_decay": args.weight_decay,
+            "precision": precision_mode,
+            "seed": args.seed,
+            "train_samples": len(train_dataset),
+            "val_samples": len(val_dataset),
+            "eval_steps": eval_steps,
+            "save_steps": save_steps,
+            "debug": debug,
+        },
+        "hardware": {
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "vram_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1)
+                       if torch.cuda.is_available() else None,
+        },
+        "results": {
+            "training_duration_seconds": round(training_duration, 1),
+            "total_steps": trainer.state.global_step,
+            "best_eval_loss": trainer.state.best_metric,
+            "best_model_checkpoint": str(trainer.state.best_model_checkpoint)
+                                     if trainer.state.best_model_checkpoint else None,
+        },
+        "log_history": trainer.state.log_history,
+    }
+    history_path = Path(args.output_dir) / "training_history.json"
+    with open(history_path, "w", encoding="utf-8") as f:
+        json.dump(history_data, f, indent=2)
+    logger.info(f"Training history saved to {history_path}")
+
     print(f"\n{'='*60}")
     print(f"  Phase 2 [{args.condition}] COMPLETE — checkpoint saved to:")
     print(f"  {args.output_dir}")
+    print(f"  Training time: {training_duration/60:.1f} min  |  Steps: {trainer.state.global_step}")
+    print(f"  Best eval_loss: {trainer.state.best_metric}")
+    print(f"  History:        {history_path}")
     print(f"{'='*60}\n")
 
 
