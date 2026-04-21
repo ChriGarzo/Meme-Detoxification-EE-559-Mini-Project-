@@ -110,20 +110,20 @@ class MemeRewriteDataset(Dataset):
         )
         target_text = ex.get("target_text", "")
 
+        # Do NOT pad here — DataCollatorForSeq2Seq handles per-batch dynamic
+        # padding.  Pre-padding every item to max_length means the attention
+        # mask is all-ones, which wastes compute and can interfere with beam
+        # search when the encoder receives only padding tokens.
         model_inputs = self.tokenizer(
             input_text,
             max_length=self.max_input_length,
             truncation=True,
-            padding="max_length",
-            return_tensors="pt",
         )
         if self._supports_text_target:
             labels = self.tokenizer(
                 text_target=target_text,
                 max_length=self.max_target_length,
                 truncation=True,
-                padding="max_length",
-                return_tensors="pt",
             )
         elif hasattr(self.tokenizer, "as_target_tokenizer"):
             with self.tokenizer.as_target_tokenizer():
@@ -131,25 +131,20 @@ class MemeRewriteDataset(Dataset):
                     target_text,
                     max_length=self.max_target_length,
                     truncation=True,
-                    padding="max_length",
-                    return_tensors="pt",
                 )
         else:
             labels = self.tokenizer(
                 target_text,
                 max_length=self.max_target_length,
                 truncation=True,
-                padding="max_length",
-                return_tensors="pt",
             )
 
-        label_ids = labels["input_ids"].squeeze()
-        label_ids[label_ids == self.tokenizer.pad_token_id] = -100
-
+        # DataCollatorForSeq2Seq will replace pad_token_id with -100 in labels
+        # using label_pad_token_id=-100.  We return the raw (non-padded) ids.
         return {
-            "input_ids":      model_inputs["input_ids"].squeeze(),
-            "attention_mask": model_inputs["attention_mask"].squeeze(),
-            "labels":         label_ids,
+            "input_ids":      model_inputs["input_ids"],
+            "attention_mask": model_inputs["attention_mask"],
+            "labels":         labels["input_ids"],
         }
 
 
@@ -397,6 +392,33 @@ def main():
     model     = BartForConditionalGeneration.from_pretrained(checkpoint, cache_dir=args.hf_cache)
 
     # -----------------------------------------------------------------------
+    # Reset generation config to clean BART defaults.
+    # Loading from a checkpoint (especially a summarisation fine-tune or a
+    # phase-1 ParaDetox run) can inherit generation_config.json settings such
+    # as min_length=56, length_penalty=2.0, no_repeat_ngram_size=3, or a
+    # max_length that is shorter than generation_max_length in the training
+    # args.  Any of these cause beam search to degenerate to "," on OOD inputs
+    # before the model has learned the [T:]/[A:]/[M:] prefix format.
+    # -----------------------------------------------------------------------
+    from transformers import GenerationConfig
+    model.generation_config = GenerationConfig(
+        decoder_start_token_id=model.config.decoder_start_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+        bos_token_id=tokenizer.bos_token_id,
+        max_new_tokens=64,
+        num_beams=4,
+        early_stopping=True,
+        no_repeat_ngram_size=3,
+        forced_bos_token_id=None,
+        forced_eos_token_id=tokenizer.eos_token_id,
+    )
+    logger.info(
+        f"Generation config reset: max_new_tokens=64, num_beams=4, "
+        f"decoder_start_token_id={model.config.decoder_start_token_id}"
+    )
+
+    # -----------------------------------------------------------------------
     # Data
     # -----------------------------------------------------------------------
     train_examples, val_examples = load_dataset(args.dataset_dir, debug)
@@ -496,7 +518,8 @@ def main():
         "warmup_steps": args.warmup_steps,
         "weight_decay": args.weight_decay,
         "predict_with_generate": True,
-        "generation_max_length": 128,
+        "generation_max_length": 64,   # max_new_tokens for decoder output
+        "generation_num_beams": 4,
         "eval_steps": eval_steps,
         "save_strategy": "steps",
         "save_steps": save_steps,
@@ -535,6 +558,35 @@ def main():
     total_steps = steps_per_epoch * num_epochs
     logger.info(f"Dataset: {len(train_dataset)} train, {len(val_dataset)} val")
     logger.info(f"Steps:   {steps_per_epoch} per epoch × {num_epochs} epochs = {total_steps} total")
+
+    # -----------------------------------------------------------------------
+    # Generation sanity check — run before training to catch config issues
+    # that would otherwise only surface after an entire eval cycle.
+    # -----------------------------------------------------------------------
+    logger.info("Running pre-training generation sanity check...")
+    _sample = val_examples[0]
+    _input_str = format_input(
+        original_text=_sample.get("original_text", "test input"),
+        target_group=_sample.get("target_group"),
+        attack_type=_sample.get("attack_type"),
+        implicit_meaning=_sample.get("implicit_meaning"),
+        condition=args.condition,
+    )
+    _enc = tokenizer(_input_str, return_tensors="pt", truncation=True, max_length=128)
+    _device = next(model.parameters()).device
+    _enc = {k: v.to(_device) for k, v in _enc.items()}
+    with torch.no_grad():
+        _gen = model.generate(**_enc, max_new_tokens=32, num_beams=4, early_stopping=True)
+    _decoded = tokenizer.decode(_gen[0], skip_special_tokens=True)
+    logger.info(f"  [sanity] input : {_input_str[:80]}")
+    logger.info(f"  [sanity] output: {_decoded[:80]}")
+    if len(_decoded.strip()) <= 2:
+        logger.warning(
+            "Sanity check: model generates only 1-2 characters! "
+            "This confirms a generation config problem. Check model.generation_config."
+        )
+    else:
+        logger.info("Sanity check: generation looks normal, proceeding to training.")
 
     logger.info(f"Starting Phase 2 training (condition={args.condition})...")
     t0 = time.time()
