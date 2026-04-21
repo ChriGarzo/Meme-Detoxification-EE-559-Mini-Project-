@@ -181,7 +181,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
     # ── Phase 1 ──────────────────────────────────────────────────────────────
     if phase1_hist and phase1_hist.get("log_history"):
         train_logs, eval_logs = split_log(phase1_hist["log_history"])
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        fig, axes = plt.subplots(1, 4, figsize=(20, 4))
         fig.suptitle("Stage 2 — Phase 1: BART ParaDetox Warm-up", fontsize=13, fontweight="bold")
         c = CONDITION_COLORS["phase1"]
 
@@ -208,6 +208,18 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
                     color=c, linewidth=2, marker="s", markersize=4)
         ax.set_title("Validation ROUGE-L"); ax.set_xlabel("Step"); ax.set_ylabel("ROUGE-L"); ax.grid(True, alpha=0.3)
 
+        ax = axes[3]
+        sta = [e for e in eval_logs if "eval_sta" in e]
+        if sta:
+            ax.plot([e["step"] for e in sta], [e["eval_sta"] for e in sta],
+                    color=c, linewidth=2, marker="^", markersize=5)
+            ax.set_ylim(0, 1.05)
+            ax.axhline(y=1.0, color="#aaa", linestyle="--", linewidth=1, alpha=0.5)
+        else:
+            ax.text(0.5, 0.5, "STA not recorded\n(old run)", ha="center", va="center",
+                    transform=ax.transAxes, color="#aaa", fontsize=10)
+        ax.set_title("Validation STA\n(↑ = more non-toxic outputs)"); ax.set_xlabel("Step"); ax.set_ylabel("STA"); ax.grid(True, alpha=0.3)
+
         res = phase1_hist.get("results", {})
         info = []
         if res.get("total_steps"):     info.append(f"Steps: {res['total_steps']}")
@@ -227,6 +239,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
     for metric_key, metric_label, fname in [
         ("eval_loss",   "Validation Loss",    "phase2_loss_curves.png"),
         ("eval_rougeL", "Validation ROUGE-L", "phase2_rouge_curves.png"),
+        ("eval_sta",    "Validation STA (↑ = more non-toxic outputs)", "phase2_sta_curves.png"),
     ]:
         fig, ax = plt.subplots(figsize=(9, 5))
         ax.set_title(f"Stage 2 — Phase 2: {metric_label} by Condition", fontsize=12, fontweight="bold")

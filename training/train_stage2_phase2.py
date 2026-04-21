@@ -303,6 +303,32 @@ def main():
     # -----------------------------------------------------------------------
     rouge = hf_evaluate.load("rouge")
 
+    # Load toxicity classifier once — reused at every eval step
+    logger.info("Loading toxicity classifier (s-nlp/roberta_toxicity_classifier)...")
+    from transformers import pipeline as hf_pipeline
+    toxicity_pipe = hf_pipeline(
+        "text-classification",
+        model="s-nlp/roberta_toxicity_classifier",
+        device=0 if torch.cuda.is_available() else -1,
+        cache_dir=args.hf_cache,
+        batch_size=32,
+        truncation=True,
+        max_length=128,
+    )
+    logger.info("Toxicity classifier loaded.")
+
+    def compute_sta_score(texts):
+        """Proportion of texts classified as non-toxic (neutral)."""
+        non_toxic = 0
+        for i in range(0, len(texts), 32):
+            batch = texts[i:i + 32]
+            try:
+                results = toxicity_pipe(batch)
+                non_toxic += sum(1 for r in results if r["label"].lower() != "toxic")
+            except Exception as e:
+                logger.warning(f"STA batch failed: {e}")
+        return round(non_toxic / max(1, len(texts)), 4)
+
     def compute_metrics(eval_pred):
         preds, labels = eval_pred
         if isinstance(preds, tuple):
@@ -311,7 +337,11 @@ def main():
         labels[labels == -100] = tokenizer.pad_token_id
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
         result = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        return {k: round(v, 4) for k, v in result.items()}
+        metrics = {k: round(v, 4) for k, v in result.items()}
+        # STA — is the model actually generating non-toxic text?
+        metrics["sta"] = compute_sta_score(decoded_preds)
+        logger.info(f"  eval STA: {metrics['sta']:.4f}  (rougeL: {metrics.get('rougeL', 0):.4f})")
+        return metrics
 
     # -----------------------------------------------------------------------
     # Training

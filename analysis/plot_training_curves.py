@@ -94,7 +94,7 @@ def plot_phase1(history: Dict, out_dir: Path, plt, np):
         print("  [WARN] Phase 1 log_history is empty — nothing to plot.")
         return
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
     fig.suptitle("Stage 2 — Phase 1: BART ParaDetox Warm-up", fontsize=13, fontweight="bold")
 
     color = CONDITION_COLORS["phase1"]
@@ -140,6 +140,24 @@ def plot_phase1(history: Dict, out_dir: Path, plt, np):
         ax.set_ylabel("ROUGE-L")
         ax.grid(True, alpha=0.3)
 
+    # ── eval STA ──
+    ax = axes[3]
+    sta_logs = [e for e in eval_logs if "eval_sta" in e]
+    if sta_logs:
+        steps  = [e["step"]     for e in sta_logs]
+        scores = [e["eval_sta"] for e in sta_logs]
+        ax.plot(steps, scores, color=color, linewidth=2, marker="^", markersize=5)
+        ax.set_ylim(0, 1.05)
+        ax.axhline(y=1.0, color="#aaa", linestyle="--", linewidth=1, alpha=0.5)
+        ax.set_title("Validation STA\n(↑ = more non-toxic outputs)")
+        ax.set_xlabel("Step")
+        ax.set_ylabel("STA (prop. non-toxic)")
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.set_title("Validation STA\n(not available)")
+        ax.text(0.5, 0.5, "STA not recorded\n(old run)", ha="center", va="center",
+                transform=ax.transAxes, color="#aaa", fontsize=10)
+
     # ── annotation box ──
     info_lines = []
     if rc.get("num_epochs"):     info_lines.append(f"Epochs: {rc['num_epochs']}")
@@ -168,8 +186,9 @@ def plot_phase2_comparison(histories: List[Dict], out_dir: Path, plt, np):
         return
 
     for metric_key, metric_label, fname in [
-        ("eval_loss",   "Validation Loss",   "phase2_loss_curves.png"),
+        ("eval_loss",   "Validation Loss",    "phase2_loss_curves.png"),
         ("eval_rougeL", "Validation ROUGE-L", "phase2_rouge_curves.png"),
+        ("eval_sta",    "Validation STA (↑ = more non-toxic outputs)", "phase2_sta_curves.png"),
     ]:
         fig, ax = plt.subplots(figsize=(9, 5))
         ax.set_title(f"Stage 2 — Phase 2: {metric_label} by Condition", fontsize=12, fontweight="bold")
