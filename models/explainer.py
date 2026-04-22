@@ -19,6 +19,26 @@ logger = logging.getLogger(__name__)
 class MemeExplainer:
     """LLaVA wrapper for generating structured hate speech explanations."""
 
+    VALID_TARGET_GROUPS = {
+        "race_ethnicity",
+        "nationality",
+        "religion",
+        "gender",
+        "sexual_orientation",
+        "disability",
+        "other",
+    }
+
+    VALID_ATTACK_TYPES = {
+        "contempt",
+        "mocking",
+        "inferiority",
+        "slurs",
+        "exclusion",
+        "dehumanizing",
+        "inciting_violence",
+    }
+
     EXPLAIN_PROMPT = """[INST] <image>
 You are analyzing a meme for hate speech. The text in the meme is: '{text}'.
 If this meme contains hate speech, respond ONLY with a valid JSON object in this exact format:
@@ -29,6 +49,22 @@ Valid target_group values: race_ethnicity, nationality, religion, gender, sexual
 
 If the meme does NOT contain hate speech, respond ONLY with:
 {{"target_group": null, "attack_type": null, "implicit_meaning": null}}
+
+Respond with JSON only. No preamble, no explanation.
+[/INST]"""
+
+    FORCE_HATEFUL_EXPLAIN_PROMPT = """[INST] <image>
+You are analyzing a meme that is already labeled as hateful in the dataset.
+The text in the meme is: '{text}'.
+Return ONLY a valid JSON object in this exact format:
+{{"target_group": "<group>", "attack_type": "<type>", "implicit_meaning": "<one sentence>"}}
+
+Rules:
+- Do NOT output null for any field.
+- target_group must be one of: race_ethnicity, nationality, religion, gender, sexual_orientation, disability, other
+- attack_type must be one of: contempt, mocking, inferiority, slurs, exclusion, dehumanizing, inciting_violence
+- implicit_meaning must be one concise sentence describing the hateful framing.
+- If uncertain, choose the closest valid category and provide your best estimate.
 
 Respond with JSON only. No preamble, no explanation.
 [/INST]"""
@@ -149,7 +185,119 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
                 "raw_output": response,
             }
 
-    def explain(self, image_path: str, text: str) -> Dict[str, Any]:
+    @staticmethod
+    def _is_null_like(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in {
+                "",
+                "null",
+                "none",
+                "n/a",
+                "na",
+                "unknown",
+                "unspecified",
+            }
+        return False
+
+    def _normalize_target_group(self, value: Any) -> Optional[str]:
+        if self._is_null_like(value) or not isinstance(value, str):
+            return None
+
+        cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if cleaned in self.VALID_TARGET_GROUPS:
+            return cleaned
+
+        if any(k in cleaned for k in ["race", "ethnic", "asian", "black", "white"]):
+            return "race_ethnicity"
+        if any(k in cleaned for k in ["nation", "country", "immigrant"]):
+            return "nationality"
+        if any(k in cleaned for k in ["relig", "muslim", "christian", "jew", "hindu"]):
+            return "religion"
+        if any(k in cleaned for k in ["gender", "woman", "women", "man", "men", "female", "male"]):
+            return "gender"
+        if any(k in cleaned for k in ["gay", "lesbian", "lgbt", "sexual"]):
+            return "sexual_orientation"
+        if any(k in cleaned for k in ["disab", "autis", "handicap"]):
+            return "disability"
+        if "other" in cleaned:
+            return "other"
+        return None
+
+    def _normalize_attack_type(self, value: Any) -> Optional[str]:
+        if self._is_null_like(value) or not isinstance(value, str):
+            return None
+
+        cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if cleaned in self.VALID_ATTACK_TYPES:
+            return cleaned
+
+        if any(k in cleaned for k in ["mock", "sarcas", "ridicul"]):
+            return "mocking"
+        if any(k in cleaned for k in ["slur", "insult"]):
+            return "slurs"
+        if any(k in cleaned for k in ["inferior", "less_than"]):
+            return "inferiority"
+        if any(k in cleaned for k in ["exclude", "ban", "expel"]):
+            return "exclusion"
+        if any(k in cleaned for k in ["dehuman", "animal", "vermin"]):
+            return "dehumanizing"
+        if any(k in cleaned for k in ["violence", "kill", "harm"]):
+            return "inciting_violence"
+        if any(k in cleaned for k in ["contempt", "disgust", "hate"]):
+            return "contempt"
+        return None
+
+    def _normalize_implicit_meaning(self, value: Any) -> Optional[str]:
+        if self._is_null_like(value) or not isinstance(value, str):
+            return None
+        cleaned = " ".join(value.strip().split())
+        return cleaned if cleaned else None
+
+    @staticmethod
+    def _is_complete_hateful_explanation(explanation: Dict[str, Any]) -> bool:
+        return bool(
+            explanation.get("target_group")
+            and explanation.get("attack_type")
+            and explanation.get("implicit_meaning")
+        )
+
+    def _normalize_explanation(
+        self,
+        explanation: Dict[str, Any],
+        force_hateful: bool = False,
+    ) -> Dict[str, Any]:
+        src = explanation if isinstance(explanation, dict) else {}
+        normalized = {
+            "target_group": self._normalize_target_group(src.get("target_group")),
+            "attack_type": self._normalize_attack_type(src.get("attack_type")),
+            "implicit_meaning": self._normalize_implicit_meaning(src.get("implicit_meaning")),
+        }
+
+        if force_hateful:
+            if normalized["target_group"] is None:
+                normalized["target_group"] = "other"
+            if normalized["attack_type"] is None:
+                normalized["attack_type"] = "contempt"
+            if normalized["implicit_meaning"] is None:
+                normalized["implicit_meaning"] = (
+                    "The meme communicates a hateful or derogatory framing toward a target group."
+                )
+
+        if src.get("parse_error"):
+            normalized["parse_error"] = True
+        if "raw_output" in src:
+            normalized["raw_output"] = src["raw_output"]
+        return normalized
+
+    def explain(
+        self,
+        image_path: str,
+        text: str,
+        force_hateful: bool = False,
+        max_retries: int = 1,
+    ) -> Dict[str, Any]:
         """
         Generate structured hate speech explanation for a meme.
 
@@ -165,27 +313,50 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
             self.load_model()
 
         image = self._load_image(image_path)
-        prompt = self.EXPLAIN_PROMPT.format(text=text)
+        prompt_template = (
+            self.FORCE_HATEFUL_EXPLAIN_PROMPT if force_hateful else self.EXPLAIN_PROMPT
+        )
+        prompt = prompt_template.format(text=text)
 
-        inputs = self.processor(
-            text=prompt,
-            images=image,
-            return_tensors="pt",
-        ).to(self.device)
+        attempts = 1 + max(0, max_retries) if force_hateful else 1
+        last_parsed: Dict[str, Any] = {
+            "target_group": None,
+            "attack_type": None,
+            "implicit_meaning": None,
+        }
 
-        with torch.no_grad():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=200,
-                do_sample=False,
+        for attempt_idx in range(attempts):
+            inputs = self.processor(
+                text=prompt,
+                images=image,
+                return_tensors="pt",
+            ).to(self.device)
+
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=200,
+                    do_sample=False,
+                )
+
+            response = self.processor.decode(
+                output_ids[0][inputs["input_ids"].shape[1] :],
+                skip_special_tokens=True,
             )
 
-        response = self.processor.decode(
-            output_ids[0][inputs["input_ids"].shape[1] :],
-            skip_special_tokens=True,
-        )
+            parsed = self._parse_json_response(response)
+            normalized = self._normalize_explanation(parsed, force_hateful=False)
+            if not force_hateful or self._is_complete_hateful_explanation(normalized):
+                return normalized
 
-        return self._parse_json_response(response)
+            last_parsed = parsed
+            logger.warning(
+                "Hateful explanation incomplete (attempt %d/%d), retrying",
+                attempt_idx + 1,
+                attempts,
+            )
+
+        return self._normalize_explanation(last_parsed, force_hateful=True)
 
     def generate_rewrite(
         self,
@@ -209,9 +380,11 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
 
         image = self._load_image(image_path)
 
-        target_group = explanation.get("target_group", "null")
-        attack_type = explanation.get("attack_type", "null")
-        implicit_meaning = explanation.get("implicit_meaning", "null")
+        target_group = explanation.get("target_group") or "other"
+        attack_type = explanation.get("attack_type") or "contempt"
+        implicit_meaning = explanation.get("implicit_meaning") or (
+            "The meme communicates a hateful or derogatory framing toward a target group."
+        )
 
         prompt = self.REWRITE_PROMPT.format(
             text=text,

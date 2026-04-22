@@ -89,6 +89,39 @@ def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
             f.write(json.dumps(item) + "\n")
 
 
+def ensure_hateful_explanation_non_null(explanation: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    """Ensure hateful explanations always have non-null conditioning fields."""
+    normalized = dict(explanation) if isinstance(explanation, dict) else {}
+    changed = False
+
+    target_group = normalized.get("target_group")
+    if not isinstance(target_group, str) or not target_group.strip() or target_group.strip().lower() in {
+        "null", "none", "n/a", "na", "unknown"
+    }:
+        normalized["target_group"] = "other"
+        changed = True
+
+    attack_type = normalized.get("attack_type")
+    if not isinstance(attack_type, str) or not attack_type.strip() or attack_type.strip().lower() in {
+        "null", "none", "n/a", "na", "unknown"
+    }:
+        normalized["attack_type"] = "contempt"
+        changed = True
+
+    implicit_meaning = normalized.get("implicit_meaning")
+    if (
+        not isinstance(implicit_meaning, str)
+        or not implicit_meaning.strip()
+        or implicit_meaning.strip().lower() in {"null", "none", "n/a", "na", "unknown"}
+    ):
+        normalized["implicit_meaning"] = (
+            "The meme communicates a hateful or derogatory framing toward a target group."
+        )
+        changed = True
+
+    return normalized, changed
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Generate explanations and pseudo-rewrites")
     parser.add_argument("--dataset", type=str, required=True, help="Dataset name (e.g., 'training')")
@@ -179,6 +212,7 @@ def main():
     explanations_batch = []
     rewrites_batch = []
     json_parse_failures = 0
+    forced_non_null_explanations = 0
     total_examples = 0
     kept_rewrites = 0
     total_pseudo_rewrites = 0
@@ -209,15 +243,38 @@ def main():
 
                 # Generate explanation
                 try:
-                    explanation = explainer.explain(image_path, original_text)
-                except json.JSONDecodeError:
+                    explanation = explainer.explain(
+                        image_path,
+                        original_text,
+                        force_hateful=is_hateful,
+                        max_retries=2,
+                    )
+                except Exception as e:
+                    logger.warning(f"Explanation generation failed for {example_id}: {e}")
+                    if is_hateful:
+                        explanation = {
+                            "target_group": "other",
+                            "attack_type": "contempt",
+                            "implicit_meaning": (
+                                "The meme communicates a hateful or derogatory framing toward a target group."
+                            ),
+                            "error": str(e),
+                        }
+                    else:
+                        explanation = {
+                            "target_group": None,
+                            "attack_type": None,
+                            "implicit_meaning": None,
+                            "error": str(e),
+                        }
+
+                if explanation.get("parse_error"):
                     json_parse_failures += 1
-                    logger.warning(f"JSON parse failure for example {example_id}")
-                    explanation = {
-                        "visual_content": "",
-                        "hateful_elements": "",
-                        "target_group": ""
-                    }
+
+                if is_hateful:
+                    explanation, was_forced = ensure_hateful_explanation_non_null(explanation)
+                    if was_forced:
+                        forced_non_null_explanations += 1
 
                 explanation_record = {
                     "id": example_id,
@@ -275,7 +332,8 @@ def main():
                         f"[{total_examples}/{len(manifest_df)}] "
                         f"explanations={total_examples} | "
                         f"rewrites_kept={kept_rewrites}/{total_pseudo_rewrites} ({keep_rate:.1f}%) | "
-                        f"json_failures={json_parse_failures}"
+                        f"json_failures={json_parse_failures} | "
+                        f"forced_non_null={forced_non_null_explanations}"
                     )
 
                 # Write batches every 100 examples
@@ -305,6 +363,7 @@ def main():
         logger.info(f"\n=== Stage 1 Summary ===")
         logger.info(f"Total examples processed: {total_examples}")
         logger.info(f"JSON parse failures: {json_parse_failures} ({json_parse_rate:.2f}%)")
+        logger.info(f"Hateful explanations forced to non-null: {forced_non_null_explanations}")
         logger.info(f"Total pseudo-rewrites generated: {total_pseudo_rewrites}")
         logger.info(f"Pseudo-rewrites kept (passed filters): {kept_rewrites}")
         logger.info(f"Keep rate: {keep_rate:.2f}%")
