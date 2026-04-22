@@ -72,8 +72,8 @@ for CONDITION in "${CONDITIONS[@]}"; do
             --hf_cache /scratch/hf_cache \
             --num_train_epochs 5 \
             --per_device_train_batch_size 8 \
-            --learning_rate 2e-5 \
-            --warmup_steps 50 \
+            --learning_rate 1e-5 \
+            --warmup_steps 200 \
             --weight_decay 0.01 \
             --paradetox_mix_ratio 0.2 \
             --seed 42
