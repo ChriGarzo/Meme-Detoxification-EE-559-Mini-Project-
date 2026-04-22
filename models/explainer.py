@@ -170,8 +170,30 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         Returns:
             Parsed dictionary or null-dict with parse_error=True
         """
+        raw = (response or "").strip()
+
+        # LLaVA can still wrap JSON in markdown fences despite prompt constraints.
+        # Strip common fence wrappers and keep only the JSON object payload.
+        candidate = raw
+        if candidate.startswith("```"):
+            lines = candidate.splitlines()
+            if lines:
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            candidate = "\n".join(lines).strip()
+
+        if candidate.lower().startswith("json\n"):
+            candidate = candidate[5:].strip()
+
+        if "{" in candidate and "}" in candidate:
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end != -1 and end >= start:
+                candidate = candidate[start:end + 1].strip()
+
         try:
-            parsed = json.loads(response.strip())
+            parsed = json.loads(candidate)
             return parsed
         except json.JSONDecodeError as e:
             logger.error(
