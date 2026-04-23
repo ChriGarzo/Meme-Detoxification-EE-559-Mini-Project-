@@ -71,13 +71,19 @@ Respond with JSON only. No preamble, no explanation.
 
     REWRITE_PROMPT = """[INST] <image>
 The text in this meme is: '{text}'
-Analysis: this meme targets {target_group} using {attack_type} — {implicit_meaning}.
+Analysis: this meme targets {target_group} using {attack_type} - {implicit_meaning}.
 Rewrite only the meme text to be non-hateful while:
 - Preserving the approximate length and informal register of the original
 - Keeping the same topic but removing the hateful framing
 - Producing natural language that could plausibly appear on a meme
 
-Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
+Output rules (strict):
+- Return one plain rewritten text only
+- No URL, no @mention, no hashtag, no watermark/site string
+- No quotes around the full answer, no markdown, no labels, no explanation
+- No newline characters
+
+Respond with ONLY the rewritten text.
 [/INST]"""
 
     def __init__(

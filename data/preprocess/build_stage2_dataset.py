@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
@@ -146,6 +147,95 @@ def filter_by_bert_score(examples: List[Dict], min_score: float = 0.4) -> List[D
     return filtered
 
 
+URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+\b")
+DOMAIN_RE = re.compile(
+    r"(?i)\b[a-z0-9][a-z0-9-]{1,62}\.(?:com|org|net|co|io|ai|edu|gov|uk|us|ru|de|fr|it|me|ly|info|biz)(?:/\S*)?\b"
+)
+MENTION_RE = re.compile(r"(?<!\w)@\w+")
+HASHTAG_RE = re.compile(r"(?<!\w)#\w+")
+LEADING_LABEL_RE = re.compile(
+    r"(?i)^\s*(?:rewrite|rewritten text|rewritten_text|output|answer|response)\s*:\s*"
+)
+
+
+def _normalize_for_compare(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def sanitize_rewrite_text(text: str) -> str:
+    """Normalize rewrite text into plain meme sentence format."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    if "[/INST]" in cleaned:
+        cleaned = cleaned.split("[/INST]")[-1].strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = " ".join(lines).strip()
+
+    cleaned = LEADING_LABEL_RE.sub("", cleaned)
+    cleaned = cleaned.replace("\r", " ").replace("\n", " ")
+    cleaned = MENTION_RE.sub(" ", cleaned)
+    cleaned = HASHTAG_RE.sub(" ", cleaned)
+    cleaned = URL_RE.sub(" ", cleaned)
+    cleaned = DOMAIN_RE.sub(" ", cleaned)
+    cleaned = cleaned.replace("\u2022", " ").replace("\ufffd", " ")
+    cleaned = re.sub(r"([!?.,;:])\1{2,}", r"\1", cleaned)
+    cleaned = re.sub(r"\s+([!?.,;:])", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.strip("\"'` ").strip()
+    return cleaned
+
+
+def is_valid_rewrite_text(rewrite: str, original_text: str) -> tuple[bool, str]:
+    """Reject rewrite targets with URL/artifact/repetition issues."""
+    text = (rewrite or "").strip()
+    if not text:
+        return False, "empty"
+
+    if URL_RE.search(text) or DOMAIN_RE.search(text):
+        return False, "url"
+    if MENTION_RE.search(text):
+        return False, "mention"
+    if HASHTAG_RE.search(text):
+        return False, "hashtag"
+
+    tokens = text.split()
+    if len(tokens) < 2:
+        return False, "too_short"
+
+    if len(text) > 280:
+        return False, "too_long"
+
+    lower_tokens = [t.lower() for t in tokens]
+    if len(tokens) >= 8:
+        unique_ratio = len(set(lower_tokens)) / max(len(lower_tokens), 1)
+        if unique_ratio < 0.35:
+            return False, "low_diversity"
+        counts = {}
+        for tok in lower_tokens:
+            counts[tok] = counts.get(tok, 0) + 1
+        if (max(counts.values()) / len(lower_tokens)) > 0.45:
+            return False, "repetition"
+
+    non_alnum_ratio = sum(
+        1 for c in text if (not c.isalnum() and not c.isspace())
+    ) / max(len(text), 1)
+    if non_alnum_ratio > 0.35:
+        return False, "symbol_heavy"
+
+    if _normalize_for_compare(text) == _normalize_for_compare(original_text):
+        return False, "no_edit"
+
+    return True, ""
+
+
 def create_input_format(
     target_group: str,
     attack_type: str,
@@ -182,19 +272,28 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
     Creates records with fields: id, input_text, target_text, condition, dataset
     """
     training_data = []
+    rejected_quality = 0
+    rejected_reasons: Dict[str, int] = {}
 
     for example in examples:
         original_text = example.get("original_text", "")
         target_group = example.get("target_group") or "null"
         attack_type = example.get("attack_type") or "null"
         implicit_meaning = example.get("explanation", "") or "null"
-        pseudo_rewrite = example.get("pseudo_rewrite", "")
+        pseudo_rewrite = sanitize_rewrite_text(example.get("pseudo_rewrite", ""))
         dataset = example.get("dataset", "unknown")
         example_id = example.get("id", "")
 
         if not original_text or not pseudo_rewrite:
             logger.warning(f"Skipping example {example_id}: missing text or rewrite")
             continue
+
+        is_valid, reason = is_valid_rewrite_text(pseudo_rewrite, original_text)
+        if not is_valid:
+            rejected_quality += 1
+            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+            continue
+
         input_text = create_input_format(target_group, attack_type, implicit_meaning, original_text)
         condition = f"{target_group}_{attack_type}"
 
@@ -215,6 +314,11 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
 
         training_data.append(training_record)
 
+    if rejected_quality > 0:
+        logger.info(
+            f"Dropped {rejected_quality} examples due to rewrite text quality constraints: "
+            f"{rejected_reasons}"
+        )
     logger.info(f"Built {len(training_data)} training records")
     return training_data
 

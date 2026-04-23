@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -87,6 +88,102 @@ def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
     with open(output_path, "a") as f:
         for item in data:
             f.write(json.dumps(item) + "\n")
+
+
+URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+\b")
+DOMAIN_RE = re.compile(
+    r"(?i)\b[a-z0-9][a-z0-9-]{1,62}\.(?:com|org|net|co|io|ai|edu|gov|uk|us|ru|de|fr|it|me|ly|info|biz)(?:/\S*)?\b"
+)
+MENTION_RE = re.compile(r"(?<!\w)@\w+")
+HASHTAG_RE = re.compile(r"(?<!\w)#\w+")
+LEADING_LABEL_RE = re.compile(
+    r"(?i)^\s*(?:rewrite|rewritten text|rewritten_text|output|answer|response)\s*:\s*"
+)
+
+
+def _normalize_for_compare(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def sanitize_generated_rewrite(text: str) -> str:
+    """
+    Deterministically sanitize LLaVA rewrite output into plain sentence text.
+
+    This strips wrappers and removes metadata artifacts that should never
+    be learned as rewrite targets.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    if "[/INST]" in cleaned:
+        cleaned = cleaned.split("[/INST]")[-1].strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = " ".join(lines).strip()
+
+    cleaned = LEADING_LABEL_RE.sub("", cleaned)
+    cleaned = cleaned.replace("\r", " ").replace("\n", " ")
+    cleaned = MENTION_RE.sub(" ", cleaned)
+    cleaned = HASHTAG_RE.sub(" ", cleaned)
+    cleaned = URL_RE.sub(" ", cleaned)
+    cleaned = DOMAIN_RE.sub(" ", cleaned)
+    cleaned = cleaned.replace("\u2022", " ").replace("\ufffd", " ")
+    cleaned = re.sub(r"([!?.,;:])\1{2,}", r"\1", cleaned)
+    cleaned = re.sub(r"\s+([!?.,;:])", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.strip("\"'` ").strip()
+    return cleaned
+
+
+def has_invalid_rewrite_format(rewrite: str, original_text: str) -> tuple[bool, str]:
+    """
+    Reject rewrites with URLs/artifacts, extreme repetition, or no real edit.
+    """
+    text = (rewrite or "").strip()
+    if not text:
+        return True, "empty"
+
+    if URL_RE.search(text) or DOMAIN_RE.search(text):
+        return True, "url"
+    if MENTION_RE.search(text):
+        return True, "mention"
+    if HASHTAG_RE.search(text):
+        return True, "hashtag"
+
+    tokens = text.split()
+    if len(tokens) < 2:
+        return True, "too_short"
+
+    if len(text) > 280:
+        return True, "too_long"
+
+    lower_tokens = [t.lower() for t in tokens]
+    if len(tokens) >= 8:
+        unique_ratio = len(set(lower_tokens)) / max(len(lower_tokens), 1)
+        if unique_ratio < 0.35:
+            return True, "low_diversity"
+        counts = {}
+        for tok in lower_tokens:
+            counts[tok] = counts.get(tok, 0) + 1
+        if (max(counts.values()) / len(lower_tokens)) > 0.45:
+            return True, "repetition"
+
+    non_alnum_ratio = sum(
+        1 for c in text if (not c.isalnum() and not c.isspace())
+    ) / max(len(text), 1)
+    if non_alnum_ratio > 0.35:
+        return True, "symbol_heavy"
+
+    if _normalize_for_compare(text) == _normalize_for_compare(original_text):
+        return True, "no_edit"
+
+    return False, ""
 
 
 def ensure_hateful_explanation_non_null(explanation: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
@@ -216,6 +313,9 @@ def main():
     total_examples = 0
     kept_rewrites = 0
     total_pseudo_rewrites = 0
+    invalid_rewrite_format = 0
+    invalid_rewrite_reason_counts: Dict[str, int] = {}
+    rewrite_generation_failures = 0
 
     tracker = EmissionsTracker(log_level="warning", output_dir=args.output_dir, output_file="emissions.csv")
     tracker.start()
@@ -289,15 +389,39 @@ def main():
                 # Generate pseudo-rewrite via LLaVA if the meme is hateful
                 if is_hateful and example_id not in processed_rewrite_ids:
                     total_pseudo_rewrites += 1
-                    try:
-                        raw_rewrite = explainer.generate_rewrite(
-                            image_path, original_text, explanation
-                        )
-                    except Exception as e:
-                        logger.warning(f"Rewrite generation failed for {example_id}: {e}")
-                        raw_rewrite = None
+                    cleaned_rewrite = None
+                    max_rewrite_attempts = 3
 
-                    pseudo_rewrites = [raw_rewrite] if raw_rewrite else []
+                    for attempt_idx in range(max_rewrite_attempts):
+                        try:
+                            raw_rewrite = explainer.generate_rewrite(
+                                image_path, original_text, explanation
+                            )
+                        except Exception as e:
+                            rewrite_generation_failures += 1
+                            logger.warning(
+                                f"Rewrite generation failed for {example_id} "
+                                f"(attempt {attempt_idx + 1}/{max_rewrite_attempts}): {e}"
+                            )
+                            continue
+
+                        candidate = sanitize_generated_rewrite(raw_rewrite)
+                        is_invalid, reason = has_invalid_rewrite_format(candidate, original_text)
+                        if is_invalid:
+                            invalid_rewrite_format += 1
+                            invalid_rewrite_reason_counts[reason] = (
+                                invalid_rewrite_reason_counts.get(reason, 0) + 1
+                            )
+                            logger.info(
+                                f"Rejected rewrite for {example_id} "
+                                f"(attempt {attempt_idx + 1}/{max_rewrite_attempts}, reason={reason})"
+                            )
+                            continue
+
+                        cleaned_rewrite = candidate
+                        break
+
+                    pseudo_rewrites = [cleaned_rewrite] if cleaned_rewrite else []
 
                     # Filter by quality
                     for rewrite in pseudo_rewrites:
@@ -333,7 +457,9 @@ def main():
                         f"explanations={total_examples} | "
                         f"rewrites_kept={kept_rewrites}/{total_pseudo_rewrites} ({keep_rate:.1f}%) | "
                         f"json_failures={json_parse_failures} | "
-                        f"forced_non_null={forced_non_null_explanations}"
+                        f"forced_non_null={forced_non_null_explanations} | "
+                        f"rewrite_invalid={invalid_rewrite_format} | "
+                        f"rewrite_failures={rewrite_generation_failures}"
                     )
 
                 # Write batches every 100 examples
@@ -367,6 +493,10 @@ def main():
         logger.info(f"Total pseudo-rewrites generated: {total_pseudo_rewrites}")
         logger.info(f"Pseudo-rewrites kept (passed filters): {kept_rewrites}")
         logger.info(f"Keep rate: {keep_rate:.2f}%")
+        logger.info(f"Rejected rewrites due to invalid format: {invalid_rewrite_format}")
+        if invalid_rewrite_reason_counts:
+            logger.info(f"Invalid rewrite reasons: {invalid_rewrite_reason_counts}")
+        logger.info(f"Rewrite generation failures: {rewrite_generation_failures}")
         logger.info(f"Explanations JSONL: {explanations_path}")
         logger.info(f"Pseudo-rewrites JSONL: {pseudo_rewrites_path}")
 
