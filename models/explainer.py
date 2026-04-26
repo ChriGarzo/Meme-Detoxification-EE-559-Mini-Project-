@@ -1,7 +1,6 @@
 import json
 import logging
 import torch
-import numpy as np
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
@@ -29,53 +28,36 @@ class MemeExplainer:
         "other",
     }
 
-    VALID_ATTACK_TYPES = {
-        "contempt",
-        "mocking",
-        "inferiority",
-        "slurs",
-        "exclusion",
-        "dehumanizing",
-        "inciting_violence",
-    }
-
     EXPLAIN_PROMPT = """[INST] <image>
-You are analyzing a meme for hate speech. The text in the meme is: '{text}'.
-If this meme contains hate speech, respond ONLY with a valid JSON object in this exact format:
-{{"target_group": "<group>", "attack_type": "<type>", "implicit_meaning": "<one sentence>"}}
+You are analyzing a meme for hate speech using BOTH image content and text.
+The text in the meme is: '{text}'.
+Respond ONLY with a valid JSON object in this exact format:
+{{"target_group": "<group>", "visual_evidence": "<short visual cue>", "implicit_meaning": "<one sentence about text+image hate meaning>"}}
 
-Valid attack_type values: contempt, mocking, inferiority, slurs, exclusion, dehumanizing, inciting_violence
 Valid target_group values: race_ethnicity, nationality, religion, gender, sexual_orientation, disability, other
 
-If the meme does NOT contain hate speech, respond ONLY with:
-{{"target_group": null, "attack_type": null, "implicit_meaning": null}}
-
-Respond with JSON only. No preamble, no explanation.
-[/INST]"""
-
-    FORCE_HATEFUL_EXPLAIN_PROMPT = """[INST] <image>
-You are analyzing a meme that is already labeled as hateful in the dataset.
-The text in the meme is: '{text}'.
-Return ONLY a valid JSON object in this exact format:
-{{"target_group": "<group>", "attack_type": "<type>", "implicit_meaning": "<one sentence>"}}
-
 Rules:
-- Do NOT output null for any field.
-- target_group must be one of: race_ethnicity, nationality, religion, gender, sexual_orientation, disability, other
-- attack_type must be one of: contempt, mocking, inferiority, slurs, exclusion, dehumanizing, inciting_violence
-- implicit_meaning must be one concise sentence describing the hateful framing.
-- If uncertain, choose the closest valid category and provide your best estimate.
+- visual_evidence must describe at least one concrete visual element from the image (person, symbol, gesture, object, scene, edit style, juxtaposition).
+- implicit_meaning must explain why the COMBINATION of text and image is hateful (not text-only paraphrase).
 
 Respond with JSON only. No preamble, no explanation.
 [/INST]"""
 
     REWRITE_PROMPT = """[INST] <image>
 The text in this meme is: '{text}'
-Analysis: this meme targets {target_group} using {attack_type} - {implicit_meaning}.
-Rewrite only the meme text to be non-hateful while:
-- Preserving the approximate length and informal register of the original
-- Keeping the same topic but removing the hateful framing
-- Producing natural language that could plausibly appear on a meme
+Analysis:
+- Targeted group: {target_group}
+- Visual evidence: {visual_evidence}
+- Why text + image are harmful: {implicit_meaning}
+Rewrite the meme text so it stays on topic but becomes clearly non-hateful.
+Guidelines:
+- Remove slurs, insults, demeaning stereotypes, and group-blaming language.
+- Keep the same core situation/topic and meme-like tone (short, punchy, informal).
+- Replace hateful framing with neutral or inclusive wording (focus on behavior/situation, not identity).
+- Prefer a fluent paraphrase over deleting words.
+- If the original is already mild, still produce a cleaner paraphrase rather than copying it.
+- Make at least one substantial wording change; do not lightly copy the original phrasing.
+- Keep it as one short sentence, usually under 18 words.
 
 Output rules (strict):
 - Return one plain rewritten text only
@@ -85,6 +67,24 @@ Output rules (strict):
 
 Respond with ONLY the rewritten text.
 [/INST]"""
+
+    REWRITE_RETRY_HINTS = {
+        "no_edit": "Retry instruction: rewrite more substantially. Use noticeably different wording from the original.",
+        "too_similar": "Retry instruction: keep the same topic, but paraphrase more aggressively and avoid reusing the original phrasing.",
+        "too_long": "Retry instruction: make the rewrite shorter and punchier. Stay under 18 words.",
+        "low_sta": "Retry instruction: make the rewrite clearly safer. Remove identity-based blame, insults, stereotypes, and contempt.",
+        "low_toxicity_drop": "Retry instruction: reduce the hateful framing more clearly while keeping the topic.",
+        "low_bertscore": "Retry instruction: stay closer to the original situation and meme topic while removing the hate.",
+        "high_bertscore": "Retry instruction: keep the meaning, but change the wording more so it is not a near copy.",
+        "empty": "Retry instruction: return exactly one short rewritten sentence and nothing else.",
+        "too_short": "Retry instruction: write one complete short sentence, not just a fragment.",
+        "url": "Retry instruction: do not include links, site names, or external references.",
+        "mention": "Retry instruction: do not include usernames or @mentions.",
+        "hashtag": "Retry instruction: do not include hashtags.",
+        "low_diversity": "Retry instruction: write a fluent sentence without repeating the same words.",
+        "repetition": "Retry instruction: avoid repetition and produce one clean sentence.",
+        "symbol_heavy": "Retry instruction: use normal sentence text only, not symbols or formatting artifacts.",
+    }
 
     def __init__(
         self,
@@ -138,9 +138,14 @@ Respond with ONLY the rewritten text.
             torch_dtype=torch.float16 if self.load_in_4bit else torch.float32,
         )
 
+        # Avoid repetitive generation warning spam.
+        eos_id = getattr(self.processor.tokenizer, "eos_token_id", None)
+        if eos_id is not None:
+            self.model.generation_config.pad_token_id = eos_id
+
         logger.info("Model loaded successfully")
 
-    def _load_image(self, image_path: str) -> torch.Tensor:
+    def _load_image(self, image_path: str) -> Any:
         """
         Load image from path with debug fallback.
 
@@ -148,7 +153,7 @@ Respond with ONLY the rewritten text.
             image_path: Path to image file
 
         Returns:
-            Tensor or PIL Image object
+            PIL Image object
 
         Raises:
             FileNotFoundError: In production mode if file doesn't exist
@@ -158,13 +163,56 @@ Respond with ONLY the rewritten text.
             if self.debug:
                 logger.warning(
                     f"Image file not found (debug mode): {image_path}. "
-                    "Returning zero tensor."
+                    "Returning black placeholder image."
                 )
-                return torch.zeros(1, 3, 336, 336)
+                return Image.new("RGB", (336, 336), color=(0, 0, 0))
             else:
                 raise FileNotFoundError(f"Image file not found: {image_path}")
 
         return Image.open(path).convert("RGB")
+
+    def _generate_batch_responses(
+        self,
+        prompts: List[str],
+        images: List[Any],
+        max_new_tokens: int,
+        do_sample: bool = False,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> List[str]:
+        """Run one batched LLaVA generation call and decode per-example responses."""
+        if not prompts:
+            return []
+
+        inputs = self.processor(
+            text=prompts,
+            images=images,
+            return_tensors="pt",
+            padding=True,
+        ).to(self.device)
+
+        with torch.no_grad():
+            generation_kwargs = {
+                **inputs,
+                "max_new_tokens": max_new_tokens,
+                "do_sample": do_sample,
+            }
+            if do_sample:
+                generation_kwargs["temperature"] = temperature
+                generation_kwargs["top_p"] = top_p
+            output_ids = self.model.generate(**generation_kwargs)
+
+        responses: List[str] = []
+        # Use padded input width as boundary for all rows (same as single-example
+        # path). attention_mask-based slicing can include prompt echoes with
+        # left-padding decoder-only models.
+        prompt_len = int(inputs["input_ids"].shape[1])
+        for i in range(output_ids.shape[0]):
+            generated_ids = output_ids[i][prompt_len:]
+            responses.append(
+                self.processor.decode(generated_ids, skip_special_tokens=True)
+            )
+        return responses
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """
@@ -193,8 +241,20 @@ Respond with ONLY the rewritten text.
             candidate = candidate[5:].strip()
 
         if "{" in candidate and "}" in candidate:
-            start = candidate.find("{")
+            # Keep only the last balanced JSON object. This handles cases where
+            # the model echoes prompt text containing example JSON patterns.
             end = candidate.rfind("}")
+            start = -1
+            depth = 0
+            for i in range(end, -1, -1):
+                ch = candidate[i]
+                if ch == "}":
+                    depth += 1
+                elif ch == "{":
+                    depth -= 1
+                    if depth == 0:
+                        start = i
+                        break
             if start != -1 and end != -1 and end >= start:
                 candidate = candidate[start:end + 1].strip()
 
@@ -207,7 +267,7 @@ Respond with ONLY the rewritten text.
             )
             return {
                 "target_group": None,
-                "attack_type": None,
+                "visual_evidence": None,
                 "implicit_meaning": None,
                 "parse_error": True,
                 "raw_output": response,
@@ -253,65 +313,36 @@ Respond with ONLY the rewritten text.
             return "other"
         return None
 
-    def _normalize_attack_type(self, value: Any) -> Optional[str]:
-        if self._is_null_like(value) or not isinstance(value, str):
-            return None
-
-        cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
-        if cleaned in self.VALID_ATTACK_TYPES:
-            return cleaned
-
-        if any(k in cleaned for k in ["mock", "sarcas", "ridicul"]):
-            return "mocking"
-        if any(k in cleaned for k in ["slur", "insult"]):
-            return "slurs"
-        if any(k in cleaned for k in ["inferior", "less_than"]):
-            return "inferiority"
-        if any(k in cleaned for k in ["exclude", "ban", "expel"]):
-            return "exclusion"
-        if any(k in cleaned for k in ["dehuman", "animal", "vermin"]):
-            return "dehumanizing"
-        if any(k in cleaned for k in ["violence", "kill", "harm"]):
-            return "inciting_violence"
-        if any(k in cleaned for k in ["contempt", "disgust", "hate"]):
-            return "contempt"
-        return None
-
     def _normalize_implicit_meaning(self, value: Any) -> Optional[str]:
         if self._is_null_like(value) or not isinstance(value, str):
             return None
         cleaned = " ".join(value.strip().split())
         return cleaned if cleaned else None
 
+    def _normalize_visual_evidence(self, value: Any) -> Optional[str]:
+        if self._is_null_like(value) or not isinstance(value, str):
+            return None
+        cleaned = " ".join(value.strip().split())
+        return cleaned if cleaned else None
+
     @staticmethod
-    def _is_complete_hateful_explanation(explanation: Dict[str, Any]) -> bool:
+    def _is_complete_explanation(explanation: Dict[str, Any]) -> bool:
         return bool(
             explanation.get("target_group")
-            and explanation.get("attack_type")
+            and explanation.get("visual_evidence")
             and explanation.get("implicit_meaning")
         )
 
     def _normalize_explanation(
         self,
         explanation: Dict[str, Any],
-        force_hateful: bool = False,
     ) -> Dict[str, Any]:
         src = explanation if isinstance(explanation, dict) else {}
         normalized = {
             "target_group": self._normalize_target_group(src.get("target_group")),
-            "attack_type": self._normalize_attack_type(src.get("attack_type")),
+            "visual_evidence": self._normalize_visual_evidence(src.get("visual_evidence")),
             "implicit_meaning": self._normalize_implicit_meaning(src.get("implicit_meaning")),
         }
-
-        if force_hateful:
-            if normalized["target_group"] is None:
-                normalized["target_group"] = "other"
-            if normalized["attack_type"] is None:
-                normalized["attack_type"] = "contempt"
-            if normalized["implicit_meaning"] is None:
-                normalized["implicit_meaning"] = (
-                    "The meme communicates a hateful or derogatory framing toward a target group."
-                )
 
         if src.get("parse_error"):
             normalized["parse_error"] = True
@@ -323,7 +354,6 @@ Respond with ONLY the rewritten text.
         self,
         image_path: str,
         text: str,
-        force_hateful: bool = False,
         max_retries: int = 1,
     ) -> Dict[str, Any]:
         """
@@ -334,22 +364,18 @@ Respond with ONLY the rewritten text.
             text: Text content of the meme
 
         Returns:
-            Dictionary with target_group, attack_type, implicit_meaning,
+            Dictionary with target_group, visual_evidence, implicit_meaning,
             and parse_error flag if JSON parsing failed
         """
         if self.model is None:
             self.load_model()
 
         image = self._load_image(image_path)
-        prompt_template = (
-            self.FORCE_HATEFUL_EXPLAIN_PROMPT if force_hateful else self.EXPLAIN_PROMPT
-        )
-        prompt = prompt_template.format(text=text)
-
-        attempts = 1 + max(0, max_retries) if force_hateful else 1
+        prompt = self.EXPLAIN_PROMPT.format(text=text)
+        attempts = 1 + max(0, max_retries)
         last_parsed: Dict[str, Any] = {
             "target_group": None,
-            "attack_type": None,
+            "visual_evidence": None,
             "implicit_meaning": None,
         }
 
@@ -373,18 +399,18 @@ Respond with ONLY the rewritten text.
             )
 
             parsed = self._parse_json_response(response)
-            normalized = self._normalize_explanation(parsed, force_hateful=False)
-            if not force_hateful or self._is_complete_hateful_explanation(normalized):
+            normalized = self._normalize_explanation(parsed)
+            if self._is_complete_explanation(normalized):
                 return normalized
 
             last_parsed = parsed
             logger.warning(
-                "Hateful explanation incomplete (attempt %d/%d), retrying",
+                "Explanation incomplete (attempt %d/%d), retrying",
                 attempt_idx + 1,
                 attempts,
             )
 
-        return self._normalize_explanation(last_parsed, force_hateful=True)
+        return self._normalize_explanation(last_parsed)
 
     def generate_rewrite(
         self,
@@ -398,7 +424,7 @@ Respond with ONLY the rewritten text.
         Args:
             image_path: Path to meme image
             text: Original meme text
-            explanation: Dictionary with target_group, attack_type, implicit_meaning
+            explanation: Dictionary with target_group, visual_evidence, implicit_meaning
 
         Returns:
             Rewritten text string
@@ -409,15 +435,17 @@ Respond with ONLY the rewritten text.
         image = self._load_image(image_path)
 
         target_group = explanation.get("target_group") or "other"
-        attack_type = explanation.get("attack_type") or "contempt"
+        visual_evidence = explanation.get("visual_evidence") or (
+            "visual details in the meme"
+        )
         implicit_meaning = explanation.get("implicit_meaning") or (
-            "The meme communicates a hateful or derogatory framing toward a target group."
+            "The meme uses text and visual context to frame a target group in a hateful way."
         )
 
-        prompt = self.REWRITE_PROMPT.format(
+        prompt = self._build_rewrite_prompt(
             text=text,
             target_group=target_group,
-            attack_type=attack_type,
+            visual_evidence=visual_evidence,
             implicit_meaning=implicit_meaning,
         )
 
@@ -445,6 +473,7 @@ Respond with ONLY the rewritten text.
         self,
         image_paths: List[str],
         texts: List[str],
+        max_retries: int = 1,
     ) -> List[Dict[str, Any]]:
         """
         Generate explanations for a batch of memes.
@@ -456,24 +485,126 @@ Respond with ONLY the rewritten text.
         Returns:
             List of explanation dictionaries
         """
-        results = []
-        for image_path, text in zip(image_paths, texts):
+        if len(image_paths) != len(texts):
+            raise ValueError(
+                f"image_paths and texts must have the same length, got {len(image_paths)} vs {len(texts)}"
+            )
+
+        if self.model is None:
+            self.load_model()
+
+        n = len(texts)
+        results: List[Optional[Dict[str, Any]]] = [None] * n
+        prompts: List[Optional[str]] = [None] * n
+        images: List[Optional[Any]] = [None] * n
+        last_parsed: Dict[int, Dict[str, Any]] = {}
+
+        for i, (image_path, text) in enumerate(zip(image_paths, texts)):
             try:
-                explanation = self.explain(image_path, text)
-                results.append(explanation)
-            except Exception as e:
-                logger.error(
-                    f"Error explaining meme ({image_path}, {text}): {e}"
-                )
-                results.append({
+                images[i] = self._load_image(image_path)
+                prompts[i] = self.EXPLAIN_PROMPT.format(text=text)
+                last_parsed[i] = {
                     "target_group": None,
-                    "attack_type": None,
+                    "visual_evidence": None,
+                    "implicit_meaning": None,
+                }
+            except Exception as e:
+                logger.error(f"Error preparing meme ({image_path}, {text}): {e}")
+                fallback = {
+                    "target_group": None,
+                    "visual_evidence": None,
                     "implicit_meaning": None,
                     "parse_error": True,
                     "error": str(e),
-                })
+                }
+                results[i] = self._normalize_explanation(fallback)
 
-        return results
+        active = [i for i in range(n) if results[i] is None]
+        attempts = 1 + max(0, max_retries)
+
+        for attempt_idx in range(attempts):
+            if not active:
+                break
+
+            batch_prompts = [prompts[i] for i in active]
+            batch_images = [images[i] for i in active]
+            responses: List[Optional[str]] = []
+            try:
+                responses = self._generate_batch_responses(
+                    prompts=batch_prompts,
+                    images=batch_images,
+                    max_new_tokens=200,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Batch explanation generation failed (%s). Falling back to serial for %d examples.",
+                    e,
+                    len(active),
+                )
+                for i in active:
+                    try:
+                        response = self._generate_batch_responses(
+                            prompts=[prompts[i]],
+                            images=[images[i]],
+                            max_new_tokens=200,
+                        )[0]
+                    except Exception as inner_e:
+                        logger.error(
+                            "Error explaining meme (%s, %s): %s",
+                            image_paths[i],
+                            texts[i],
+                            inner_e,
+                        )
+                        response = None
+                    responses.append(response)
+
+            next_active: List[int] = []
+            for pos, idx in enumerate(active):
+                response = responses[pos] if pos < len(responses) else None
+                if response is None:
+                    fallback = {
+                        "target_group": None,
+                        "visual_evidence": None,
+                        "implicit_meaning": None,
+                        "parse_error": True,
+                        "error": "Model generation failed",
+                    }
+                    results[idx] = self._normalize_explanation(fallback)
+                    continue
+
+                parsed = self._parse_json_response(response)
+                normalized = self._normalize_explanation(parsed)
+
+                if self._is_complete_explanation(normalized):
+                    results[idx] = normalized
+                    continue
+
+                last_parsed[idx] = parsed
+                if attempt_idx + 1 < attempts:
+                    logger.warning(
+                        "Explanation incomplete (attempt %d/%d), retrying",
+                        attempt_idx + 1,
+                        attempts,
+                    )
+                    next_active.append(idx)
+                else:
+                    results[idx] = self._normalize_explanation(last_parsed[idx])
+
+            active = next_active
+
+        for i in range(n):
+            if results[i] is None:
+                results[i] = self._normalize_explanation(last_parsed.get(i, {}))
+
+        return [
+            r if r is not None else {
+                "target_group": None,
+                "visual_evidence": None,
+                "implicit_meaning": None,
+                "parse_error": True,
+            }
+            for r in results
+        ]
 
     def batch_rewrite(
         self,
@@ -492,19 +623,235 @@ Respond with ONLY the rewritten text.
         Returns:
             List of rewritten texts
         """
-        results = []
-        for image_path, text, explanation in zip(
-            image_paths, texts, explanations
+        if not (len(image_paths) == len(texts) == len(explanations)):
+            raise ValueError(
+                "image_paths, texts, and explanations must have the same length"
+            )
+
+        if self.model is None:
+            self.load_model()
+
+        n = len(texts)
+        results: List[str] = ["" for _ in range(n)]
+        valid_indices: List[int] = []
+        prompts: List[str] = []
+        images: List[Any] = []
+
+        for i, (image_path, text, explanation) in enumerate(
+            zip(image_paths, texts, explanations)
         ):
             try:
-                rewrite = self.generate_rewrite(
-                    image_path, text, explanation
-                )
-                results.append(rewrite)
+                image = self._load_image(image_path)
             except Exception as e:
-                logger.error(
-                    f"Error rewriting meme ({image_path}, {text}): {e}"
-                )
-                results.append(f"[REWRITE ERROR: {str(e)}]")
+                logger.error(f"Error rewriting meme ({image_path}, {text}): {e}")
+                results[i] = f"[REWRITE ERROR: {str(e)}]"
+                continue
+
+            target_group = explanation.get("target_group") or "other"
+            visual_evidence = explanation.get("visual_evidence") or (
+                "visual details in the meme"
+            )
+            implicit_meaning = explanation.get("implicit_meaning") or (
+                "The meme uses text and visual context to frame a target group in a hateful way."
+            )
+            prompt = self._build_rewrite_prompt(
+                text=text,
+                target_group=target_group,
+                visual_evidence=visual_evidence,
+                implicit_meaning=implicit_meaning,
+            )
+
+            valid_indices.append(i)
+            prompts.append(prompt)
+            images.append(image)
+
+        if not valid_indices:
+            return results
+
+        responses: List[Optional[str]] = []
+        try:
+            responses = self._generate_batch_responses(
+                prompts=prompts,
+                images=images,
+                max_new_tokens=150,
+            )
+        except Exception as e:
+            logger.warning(
+                "Batch rewrite generation failed (%s). Falling back to serial for %d examples.",
+                e,
+                len(valid_indices),
+            )
+            for prompt, image in zip(prompts, images):
+                try:
+                    response = self._generate_batch_responses(
+                        prompts=[prompt],
+                        images=[image],
+                        max_new_tokens=150,
+                    )[0]
+                except Exception as inner_e:
+                    response = f"[REWRITE ERROR: {str(inner_e)}]"
+                responses.append(response)
+
+        for pos, idx in enumerate(valid_indices):
+            response = responses[pos] if pos < len(responses) else ""
+            if response is None:
+                response = ""
+            results[idx] = response.strip()
 
         return results
+
+    def _build_rewrite_prompt(
+        self,
+        text: str,
+        target_group: str,
+        visual_evidence: str,
+        implicit_meaning: str,
+        feedback_reason: Optional[str] = None,
+    ) -> str:
+        prompt = self.REWRITE_PROMPT.format(
+            text=text,
+            target_group=target_group,
+            visual_evidence=visual_evidence,
+            implicit_meaning=implicit_meaning,
+        )
+        extra_hint = self.REWRITE_RETRY_HINTS.get((feedback_reason or "").strip(), "")
+        if extra_hint:
+            prompt = prompt.replace(
+                "Respond with ONLY the rewritten text.",
+                f"{extra_hint}\nRespond with ONLY the rewritten text.",
+            )
+        return prompt
+
+    def batch_rewrite_candidates(
+        self,
+        image_paths: List[str],
+        texts: List[str],
+        explanations: List[Dict[str, Any]],
+        feedback_reasons: Optional[List[Optional[str]]] = None,
+        candidates_per_example: int = 3,
+        do_sample: bool = True,
+        temperature: float = 0.75,
+        top_p: float = 0.92,
+    ) -> List[List[str]]:
+        """
+        Generate multiple rewrite candidates per example.
+
+        The generation call expands the batch by repeating each prompt/image pair,
+        which keeps the output mapping simple while still allowing sampling to
+        produce diverse candidates.
+        """
+        if not (len(image_paths) == len(texts) == len(explanations)):
+            raise ValueError(
+                "image_paths, texts, and explanations must have the same length"
+            )
+        if feedback_reasons is not None and len(feedback_reasons) != len(texts):
+            raise ValueError("feedback_reasons must match the number of examples")
+        if candidates_per_example < 1:
+            raise ValueError("candidates_per_example must be >= 1")
+
+        if self.model is None:
+            self.load_model()
+
+        n = len(texts)
+        grouped_results: List[List[str]] = [[] for _ in range(n)]
+        valid_indices: List[int] = []
+        prompts: List[str] = []
+        images: List[Any] = []
+
+        for i, (image_path, text, explanation) in enumerate(
+            zip(image_paths, texts, explanations)
+        ):
+            try:
+                image = self._load_image(image_path)
+            except Exception as e:
+                logger.error(f"Error rewriting meme ({image_path}, {text}): {e}")
+                grouped_results[i] = [f"[REWRITE ERROR: {str(e)}]"]
+                continue
+
+            target_group = explanation.get("target_group") or "other"
+            visual_evidence = explanation.get("visual_evidence") or (
+                "visual details in the meme"
+            )
+            implicit_meaning = explanation.get("implicit_meaning") or (
+                "The meme uses text and visual context to frame a target group in a hateful way."
+            )
+            feedback_reason = (
+                feedback_reasons[i] if feedback_reasons is not None else None
+            )
+            prompt = self._build_rewrite_prompt(
+                text=text,
+                target_group=target_group,
+                visual_evidence=visual_evidence,
+                implicit_meaning=implicit_meaning,
+                feedback_reason=feedback_reason,
+            )
+
+            valid_indices.append(i)
+            for _ in range(candidates_per_example):
+                prompts.append(prompt)
+                images.append(image)
+
+        if not prompts:
+            return grouped_results
+
+        responses: List[Optional[str]] = []
+        try:
+            responses = self._generate_batch_responses(
+                prompts=prompts,
+                images=images,
+                max_new_tokens=150,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        except Exception as e:
+            logger.warning(
+                "Batch rewrite candidate generation failed (%s). Falling back to serial for %d examples.",
+                e,
+                len(valid_indices),
+            )
+            for idx in valid_indices:
+                image = self._load_image(image_paths[idx])
+                target_group = explanations[idx].get("target_group") or "other"
+                visual_evidence = explanations[idx].get("visual_evidence") or (
+                    "visual details in the meme"
+                )
+                implicit_meaning = explanations[idx].get("implicit_meaning") or (
+                    "The meme uses text and visual context to frame a target group in a hateful way."
+                )
+                feedback_reason = (
+                    feedback_reasons[idx] if feedback_reasons is not None else None
+                )
+                prompt = self._build_rewrite_prompt(
+                    text=texts[idx],
+                    target_group=target_group,
+                    visual_evidence=visual_evidence,
+                    implicit_meaning=implicit_meaning,
+                    feedback_reason=feedback_reason,
+                )
+                for _ in range(candidates_per_example):
+                    try:
+                        response = self._generate_batch_responses(
+                            prompts=[prompt],
+                            images=[image],
+                            max_new_tokens=150,
+                            do_sample=do_sample,
+                            temperature=temperature,
+                            top_p=top_p,
+                        )[0]
+                    except Exception as inner_e:
+                        response = f"[REWRITE ERROR: {str(inner_e)}]"
+                    responses.append(response)
+
+        cursor = 0
+        for idx in valid_indices:
+            grouped: List[str] = []
+            for _ in range(candidates_per_example):
+                response = responses[cursor] if cursor < len(responses) else ""
+                if response is None:
+                    response = ""
+                grouped.append(response.strip())
+                cursor += 1
+            grouped_results[idx] = grouped
+
+        return grouped_results

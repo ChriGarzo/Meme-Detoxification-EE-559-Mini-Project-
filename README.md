@@ -20,10 +20,20 @@ Stage 0 ──── OCR + CLIP filtering  [per dataset, GPU]
                │  All 3 datasets represented in every split
                │  Outputs: unified_train.csv / unified_val.csv / unified_test.csv
                ▼
-Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites  [GPU]
-               │  Run on unified_train split only
-               │    - target_group, attack_type, implicit_meaning
-               │    - pseudo-rewrite (teacher output, BERTScore + STA filtered)
+Stage 1A ─── LLaVA-Next explanations (sharded)  [GPU]
+               │  Run on unified_train split only (8 shards in parallel)
+               │  Output: train_explanations_shardXXof08.jsonl
+               ▼
+  Merge explanations shards
+               │  Output: train_explanations_merged.jsonl
+               ▼
+Stage 1B ─── LLaVA-Next pseudo-rewrites (sharded)  [GPU]
+               │  Reads explanations from merged/sharded JSONL
+               │  Skips IDs that already have a kept rewrite
+               │  Output: train_pseudo_rewrites_shardXXof08.jsonl
+               ▼
+  Merge pseudo-rewrite shards
+               │  Output: train_pseudo_rewrites_merged.jsonl
                ▼
    Build Stage 2 Dataset
                │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
@@ -78,7 +88,11 @@ hateful_meme_rewriting/
 │   └── proxy.py                       ← ExplanationProxy MLP + CLIP
 │
 ├── inference/
-│   ├── run_stage1.py                  ← LLaVA inference: explanations + pseudo-rewrites
+│   ├── run_stage1.py                  ← legacy Stage 1 entrypoint
+│   ├── run_stage1_explanations_only_sharded.py ← Stage 1A (explanations-only)
+│   ├── run_stage1_rewrites_only_sharded.py     ← Stage 1B (rewrites-only, reuses explanations)
+│   ├── merge_stage1_explanations_shards.py     ← merges explanation shards
+│   ├── merge_stage1_rewrites_shards.py         ← merges rewrite shards
 │   ├── run_stage2.py                  ← BART inference over filtered memes
 │   └── run_proxy_pipeline.py          ← VLM-free inference via proxy
 │
@@ -112,7 +126,9 @@ hateful_meme_rewriting/
     ├── runai_stage0_filter.sh         ← Stage 0 per dataset (GPU)
     ├── runai_sample_filter_examples.sh ← QC sampling after Stage 0 (no GPU needed)
     ├── runai_build_unified_splits.sh  ← builds unified splits after Stage 0
-    ├── runai_stage1_explain.sh
+    ├── runai_stage1_explain.sh        ← legacy Stage 1 launcher
+    ├── runai_stage1_explanations_only_sharded.sh
+    ├── runai_stage1_rewrites_only_sharded.sh
     ├── runai_build_stage2_dataset.sh
     ├── runai_stage2_phase2.sh
     ├── runai_train_proxy.sh
@@ -302,10 +318,46 @@ runai logs hmr-build-unified-splits -p course-ee-559-<username> --follow
 ```
 Reads the three Stage 0 manifests, filters to `kept=True` images only, then creates stratified 80/10/10 splits ensuring all three datasets are represented in every split. Outputs `unified_train.csv`, `unified_val.csv`, `unified_test.csv` to `/scratch/hmr_data/unified_splits/`.
 
-**Stage 1 — LLaVA explanations + pseudo-rewrites** (runs on unified training split)
+**Stage 1A — explanations only (sharded)**  
+Run all shards. Example for 8 shards:
 ```bash
-bash scripts/runai_stage1_explain.sh <UID>
+for i in $(seq 0 7); do
+  SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_explanations_only_sharded.sh <UID>
+done
 ```
+
+**Merge explanation shards**  
+Run once after all Stage 1A shards finish:
+```bash
+python inference/merge_stage1_explanations_shards.py \
+  --dataset train \
+  --input_dir /scratch/hmr_stage1_output \
+  --num_shards 8
+```
+This creates:
+`/scratch/hmr_stage1_output/train_explanations_merged.jsonl`
+
+**Stage 1B — rewrites only (sharded, reuses existing explanations)**  
+Run all shards. Example for 8 shards:
+```bash
+for i in $(seq 0 7); do
+  SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_rewrites_only_sharded.sh <UID>
+done
+```
+By default, rewrites-only will first look for:
+`/scratch/hmr_stage1_output/train_explanations_merged.jsonl`
+and will skip examples that already exist in shard rewrite outputs.
+
+**Merge pseudo-rewrite shards**  
+Run once after all Stage 1B shards finish:
+```bash
+python inference/merge_stage1_rewrites_shards.py \
+  --dataset train \
+  --input_dir /scratch/hmr_stage1_output \
+  --num_shards 8
+```
+This creates:
+`/scratch/hmr_stage1_output/train_pseudo_rewrites_merged.jsonl`
 
 **Build Stage 2 dataset** (wait for all Stage 1 jobs to complete)
 ```bash
@@ -357,11 +409,14 @@ bash scripts/runai_evaluate.sh <UID>
 │       ├── unified_test.csv
 │       └── split_stats.json
 ├── hmr_stage1_output/
-│   ├── harmeme/
-│   │   ├── harmeme_explanations.jsonl
-│   │   └── harmeme_pseudo_rewrites.jsonl
-│   ├── mami/  (same structure)
-│   └── mmhs150k/  (same structure)
+│   ├── stage1_explain_only_shardXXof08.log
+│   ├── stage1_rewrite_only_shardXXof08.log
+│   ├── train_explanations_shard00of08.jsonl
+│   ├── ... train_explanations_shard07of08.jsonl
+│   ├── train_explanations_merged.jsonl
+│   ├── train_pseudo_rewrites_shard00of08.jsonl
+│   ├── ... train_pseudo_rewrites_shard07of08.jsonl
+│   └── train_pseudo_rewrites_merged.jsonl
 ├── hmr_stage2_dataset/
 │   ├── train.jsonl
 │   └── val.jsonl

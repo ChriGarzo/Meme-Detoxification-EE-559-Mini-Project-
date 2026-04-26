@@ -401,20 +401,30 @@ def main():
     # before the model has learned the [T:]/[A:]/[M:] prefix format.
     # -----------------------------------------------------------------------
     from transformers import GenerationConfig
-    model.generation_config = GenerationConfig(
-        decoder_start_token_id=model.config.decoder_start_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.pad_token_id,
-        bos_token_id=tokenizer.bos_token_id,
-        num_beams=4,
-        early_stopping=True,
-        no_repeat_ngram_size=3,
-        forced_bos_token_id=None,
-        forced_eos_token_id=tokenizer.eos_token_id,
-    )
+    generation_kwargs = {
+        "decoder_start_token_id": model.config.decoder_start_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+        "pad_token_id": tokenizer.pad_token_id,
+        "bos_token_id": tokenizer.bos_token_id,
+        "num_beams": 4,
+        "early_stopping": True,
+        "no_repeat_ngram_size": 3,
+        "forced_bos_token_id": None,
+        "forced_eos_token_id": tokenizer.eos_token_id,
+        "max_length": 64,
+        "min_length": 8,
+    }
+    if "min_new_tokens" in inspect.signature(GenerationConfig.__init__).parameters:
+        generation_kwargs["min_new_tokens"] = 8
+
+    model.generation_config = GenerationConfig(**generation_kwargs)
     logger.info(
-        f"Generation config reset: max_new_tokens=64, num_beams=4, "
-        f"decoder_start_token_id={model.config.decoder_start_token_id}"
+        "Generation config reset: max_length=%s, min_length=%s, num_beams=%s, "
+        "decoder_start_token_id=%s",
+        model.generation_config.max_length,
+        model.generation_config.min_length,
+        model.generation_config.num_beams,
+        model.config.decoder_start_token_id,
     )
 
     # -----------------------------------------------------------------------
@@ -483,6 +493,25 @@ def main():
                 logger.warning(f"STA batch failed: {e}")
         return round(non_toxic / max(1, len(texts)), 4)
 
+    def _is_collapsed_output(text: str) -> bool:
+        stripped = (text or "").strip()
+        if not stripped:
+            return True
+
+        tokens = stripped.split()
+        if len(tokens) <= 1:
+            return True
+
+        norm_tokens = [tok.lower() for tok in tokens]
+        unique_ratio = len(set(norm_tokens)) / max(len(norm_tokens), 1)
+        if len(tokens) >= 6 and unique_ratio < 0.35:
+            return True
+
+        if len(set(stripped)) <= 2 and len(stripped) >= 4:
+            return True
+
+        return False
+
     def compute_metrics(eval_pred):
         preds, labels = eval_pred
         if isinstance(preds, tuple):
@@ -492,9 +521,28 @@ def main():
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
         result = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
         metrics = {k: round(v, 4) for k, v in result.items()}
+
+        collapsed = sum(1 for pred in decoded_preds if _is_collapsed_output(pred))
+        collapse_rate = collapsed / max(1, len(decoded_preds))
+        metrics["collapse_rate"] = round(collapse_rate, 4)
+
+        if collapse_rate >= 0.5:
+            logger.warning(
+                "Collapse guard triggered: %.1f%% outputs look degenerate. "
+                "Forcing ROUGE metrics to 0 for this eval step.",
+                100 * collapse_rate,
+            )
+            for key in ["rouge1", "rouge2", "rougeL", "rougeLsum"]:
+                metrics[key] = 0.0
+
         # STA — is the model actually generating non-toxic text?
         metrics["sta"] = compute_sta_score(decoded_preds)
-        logger.info(f"  eval STA: {metrics['sta']:.4f}  (rougeL: {metrics.get('rougeL', 0):.4f})")
+        logger.info(
+            "  eval STA: %.4f  (rougeL: %.4f, collapse_rate: %.4f)",
+            metrics["sta"],
+            metrics.get("rougeL", 0.0),
+            metrics["collapse_rate"],
+        )
         # Sample outputs — helps diagnose generation quality
         for i in range(min(2, len(decoded_preds))):
             logger.info(f"  [sample {i+1}] INPUT REF: {decoded_labels[i][:80]}")
@@ -523,13 +571,15 @@ def main():
         "save_strategy": "steps",
         "save_steps": save_steps,
         "load_best_model_at_end": True,
-        "metric_for_best_model": "eval_loss",
-        "greater_is_better": False,
+        "metric_for_best_model": "eval_rougeL",
+        "greater_is_better": True,
         "logging_steps": DEBUG_CONFIG["logging_steps"] if debug else 25,
         "seed": args.seed,
         "report_to": "none",
-        "save_total_limit": 2,
+        "save_total_limit": 5,
     }
+    if "generation_min_length" in seq2seq_args_params:
+        training_kwargs["generation_min_length"] = 8
     if "fp16" in seq2seq_args_params:
         training_kwargs["fp16"] = use_fp16
     if "bf16" in seq2seq_args_params:
@@ -574,8 +624,15 @@ def main():
     _enc = tokenizer(_input_str, return_tensors="pt", truncation=True, max_length=128)
     _device = next(model.parameters()).device
     _enc = {k: v.to(_device) for k, v in _enc.items()}
+    sanity_generate_kwargs = {
+        "max_new_tokens": 32,
+        "num_beams": 4,
+        "early_stopping": True,
+    }
+    if "min_new_tokens" in inspect.signature(model.generate).parameters:
+        sanity_generate_kwargs["min_new_tokens"] = 8
     with torch.no_grad():
-        _gen = model.generate(**_enc, max_new_tokens=32, num_beams=4, early_stopping=True)
+        _gen = model.generate(**_enc, **sanity_generate_kwargs)
     _decoded = tokenizer.decode(_gen[0], skip_special_tokens=True)
     logger.info(f"  [sanity] input : {_input_str[:80]}")
     logger.info(f"  [sanity] output: {_decoded[:80]}")
@@ -602,6 +659,9 @@ def main():
     #   - training steps: {"loss": ..., "learning_rate": ..., "epoch": ..., "step": ...}
     #   - eval steps:     {"eval_loss": ..., "eval_rouge1": ..., "eval_rougeL": ..., ...}
     # ------------------------------------------------------------------
+    eval_entries = [e for e in trainer.state.log_history if "eval_loss" in e]
+    min_eval_loss = min((e.get("eval_loss") for e in eval_entries), default=None)
+
     history_data = {
         "phase": "phase2_meme_finetune",
         "condition": args.condition,
@@ -633,7 +693,9 @@ def main():
         "results": {
             "training_duration_seconds": round(training_duration, 1),
             "total_steps": trainer.state.global_step,
-            "best_eval_loss": trainer.state.best_metric,
+            "best_model_metric_name": "eval_rougeL",
+            "best_model_metric_value": trainer.state.best_metric,
+            "min_eval_loss": min_eval_loss,
             "best_model_checkpoint": str(trainer.state.best_model_checkpoint)
                                      if trainer.state.best_model_checkpoint else None,
         },
@@ -648,7 +710,7 @@ def main():
     print(f"  Phase 2 [{args.condition}] COMPLETE — checkpoint saved to:")
     print(f"  {args.output_dir}")
     print(f"  Training time: {training_duration/60:.1f} min  |  Steps: {trainer.state.global_step}")
-    print(f"  Best eval_loss: {trainer.state.best_metric}")
+    print(f"  Best eval_rougeL: {trainer.state.best_metric}")
     print(f"  History:        {history_path}")
     print(f"{'='*60}\n")
 

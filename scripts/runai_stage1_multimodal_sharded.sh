@@ -2,18 +2,21 @@
 set -e
 
 # =============================================================================
-# Stage 1: LLaVA explanation generation + pseudo-rewrites (GPU A100-40G)
+# Stage 1 (multimodal + sharded):
+#   LLaVA explanation generation + pseudo-rewrites
+#   + VisualBERT-style multimodal hatefulness scoring
 #
 # Usage:
-#   bash scripts/runai_stage1_explain.sh <UID_NUMBER>   # home code path
-#   bash scripts/runai_stage1_explain.sh                # scratch code path
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh <UID_NUMBER>
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh
 #
 # Example:
-#   bash scripts/runai_stage1_explain.sh 123456
+#   for i in $(seq 0 7); do
+#     SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh
+#   done
 #
 # Note: USERNAME is taken automatically from $USER.
-#       Submits one job per dataset (harmeme, mami, mmhs150k).
-#       Assumes Stage 0 has already been run for all datasets.
+#       Assumes Stage 0/unified split already exists.
 # =============================================================================
 
 # --- Validate args ---
@@ -30,7 +33,20 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
-STAGE1_BATCH_SIZE="${STAGE1_BATCH_SIZE:-8}"
+STAGE1_BATCH_SIZE="${STAGE1_BATCH_SIZE:-4}"
+SCORE_BATCH_SIZE="${SCORE_BATCH_SIZE:-8}"
+NUM_SHARDS="${NUM_SHARDS:-8}"
+SHARD_ID="${SHARD_ID:-0}"
+MULTIMODAL_MODEL_NAME="${MULTIMODAL_MODEL_NAME:-chiragmittal92/visualbert-hateful-memes-finetuned-model}"
+
+if [ "${NUM_SHARDS}" -lt 1 ]; then
+    echo "ERROR: NUM_SHARDS must be >= 1 (got ${NUM_SHARDS})"
+    exit 1
+fi
+if [ "${SHARD_ID}" -lt 0 ] || [ "${SHARD_ID}" -ge "${NUM_SHARDS}" ]; then
+    echo "ERROR: SHARD_ID must be in [0, NUM_SHARDS-1] (got SHARD_ID=${SHARD_ID}, NUM_SHARDS=${NUM_SHARDS})"
+    exit 1
+fi
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -43,12 +59,12 @@ else
     MODE_LABEL="scratch"
 fi
 
-SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1.py"
+SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1_multimodal_sharded.py"
 # On login nodes, /scratch may not be mounted at that absolute path even though
 # it is mounted as /scratch inside the RunAI job container. Validate against the
 # local repo as fallback in scratch mode.
 if [ ! -f "${SCRIPT_PATH}" ]; then
-    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1.py" ]; then
+    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1_multimodal_sharded.py" ]; then
         echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
     else
         echo "ERROR: Script not found at: ${SCRIPT_PATH}"
@@ -57,17 +73,22 @@ if [ ! -f "${SCRIPT_PATH}" ]; then
     fi
 fi
 
-echo "=== Stage 1: LLaVA Explanation Generation ==="
+JOB_NAME="hmr-stage1-mm-s${SHARD_ID}"
+
+echo "=== Stage 1: Multimodal + Sharded ==="
 echo "  User:     ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:     ${MODE_LABEL}"
 echo "  Code:     ${CODE_ROOT}"
 echo "  Group:    ${GROUP_NUM}"
 echo "  Input:    /scratch/hmr_data/unified_splits/unified_train.csv (hateful only)"
 echo "  Image:    ${IMAGE}"
-echo "  Batch:    ${STAGE1_BATCH_SIZE}"
+echo "  Job:      ${JOB_NAME}"
+echo "  Shard:    ${SHARD_ID}/${NUM_SHARDS}"
+echo "  Batch:    ${STAGE1_BATCH_SIZE} (generation), ${SCORE_BATCH_SIZE} (multimodal scorer)"
+echo "  MM model: ${MULTIMODAL_MODEL_NAME}"
 echo ""
 
-runai submit hmr-stage1 \
+runai submit "${JOB_NAME}" \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
     --node-pools a100-40g \
@@ -84,11 +105,15 @@ runai submit hmr-stage1 \
         --images_dir /scratch/hmr_data \
         --output_dir /scratch/hmr_stage1_output \
         --hf_cache /scratch/hf_cache \
+        --multimodal_model_name "${MULTIMODAL_MODEL_NAME}" \
         --batch_size ${STAGE1_BATCH_SIZE} \
+        --score_batch_size ${SCORE_BATCH_SIZE} \
+        --num_shards ${NUM_SHARDS} \
+        --shard_id ${SHARD_ID} \
         --load_in_4bit \
         --hateful_only
 
 echo ""
-echo "Stage 1 job submitted. Wait for completion before running build_stage2_dataset."
+echo "Stage 1 shard job submitted."
 echo "Follow logs with:"
-echo "  runai logs hmr-stage1 -p course-ee-559-${USERNAME} --follow"
+echo "  runai logs ${JOB_NAME} -p course-ee-559-${USERNAME} --follow"

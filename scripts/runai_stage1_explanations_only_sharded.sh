@@ -2,37 +2,39 @@
 set -e
 
 # =============================================================================
-# Stage 1: LLaVA explanation generation + pseudo-rewrites (GPU A100-40G)
+# Stage 1 (explanations-only + sharded)
 #
 # Usage:
-#   bash scripts/runai_stage1_explain.sh <UID_NUMBER>   # home code path
-#   bash scripts/runai_stage1_explain.sh                # scratch code path
-#
-# Example:
-#   bash scripts/runai_stage1_explain.sh 123456
-#
-# Note: USERNAME is taken automatically from $USER.
-#       Submits one job per dataset (harmeme, mami, mmhs150k).
-#       Assumes Stage 0 has already been run for all datasets.
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_explanations_only_sharded.sh <UID_NUMBER>
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_explanations_only_sharded.sh
 # =============================================================================
 
-# --- Validate args ---
 if [ "$#" -gt 1 ]; then
     echo "ERROR: Too many arguments."
     echo "Usage:"
-    echo "  bash $0 <UID_NUMBER>   # use /home/\${USER}/hateful_meme_rewriting"
-    echo "  bash $0                # use /scratch/hateful_meme_rewriting"
+    echo "  bash $0 <UID_NUMBER>"
+    echo "  bash $0"
     exit 1
 fi
 
-# --- Configuration (do NOT edit these) ---
 USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
-STAGE1_BATCH_SIZE="${STAGE1_BATCH_SIZE:-8}"
+STAGE1_BATCH_SIZE="${STAGE1_BATCH_SIZE:-4}"
+NUM_SHARDS="${NUM_SHARDS:-8}"
+SHARD_ID="${SHARD_ID:-0}"
+EXPLAIN_MAX_RETRIES="${EXPLAIN_MAX_RETRIES:-0}"
 
-# --- Path/UID mode selection ---
+if [ "${NUM_SHARDS}" -lt 1 ]; then
+    echo "ERROR: NUM_SHARDS must be >= 1 (got ${NUM_SHARDS})"
+    exit 1
+fi
+if [ "${SHARD_ID}" -lt 0 ] || [ "${SHARD_ID}" -ge "${NUM_SHARDS}" ]; then
+    echo "ERROR: SHARD_ID must be in [0, NUM_SHARDS-1] (got SHARD_ID=${SHARD_ID}, NUM_SHARDS=${NUM_SHARDS})"
+    exit 1
+fi
+
 if [ -n "$1" ]; then
     UID_NUM="$1"
     CODE_ROOT="/home/${USERNAME}/hateful_meme_rewriting"
@@ -43,12 +45,9 @@ else
     MODE_LABEL="scratch"
 fi
 
-SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1.py"
-# On login nodes, /scratch may not be mounted at that absolute path even though
-# it is mounted as /scratch inside the RunAI job container. Validate against the
-# local repo as fallback in scratch mode.
+SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1_explanations_only_sharded.py"
 if [ ! -f "${SCRIPT_PATH}" ]; then
-    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1.py" ]; then
+    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1_explanations_only_sharded.py" ]; then
         echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
     else
         echo "ERROR: Script not found at: ${SCRIPT_PATH}"
@@ -57,17 +56,22 @@ if [ ! -f "${SCRIPT_PATH}" ]; then
     fi
 fi
 
-echo "=== Stage 1: LLaVA Explanation Generation ==="
-echo "  User:     ${USERNAME} (UID: ${UID_NUM})"
-echo "  Mode:     ${MODE_LABEL}"
-echo "  Code:     ${CODE_ROOT}"
-echo "  Group:    ${GROUP_NUM}"
-echo "  Input:    /scratch/hmr_data/unified_splits/unified_train.csv (hateful only)"
-echo "  Image:    ${IMAGE}"
-echo "  Batch:    ${STAGE1_BATCH_SIZE}"
+JOB_NAME="hmr-stage1-exp-s${SHARD_ID}"
+
+echo "=== Stage 1: Explanations Only (Sharded) ==="
+echo "  User:      ${USERNAME} (UID: ${UID_NUM})"
+echo "  Mode:      ${MODE_LABEL}"
+echo "  Code:      ${CODE_ROOT}"
+echo "  Group:     ${GROUP_NUM}"
+echo "  Input:     /scratch/hmr_data/unified_splits/unified_train.csv"
+echo "  Image:     ${IMAGE}"
+echo "  Job:       ${JOB_NAME}"
+echo "  Shard:     ${SHARD_ID}/${NUM_SHARDS}"
+echo "  Batch:     ${STAGE1_BATCH_SIZE}"
+echo "  Retries:   ${EXPLAIN_MAX_RETRIES}"
 echo ""
 
-runai submit hmr-stage1 \
+runai submit "${JOB_NAME}" \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
     --node-pools a100-40g \
@@ -85,10 +89,13 @@ runai submit hmr-stage1 \
         --output_dir /scratch/hmr_stage1_output \
         --hf_cache /scratch/hf_cache \
         --batch_size ${STAGE1_BATCH_SIZE} \
+        --num_shards ${NUM_SHARDS} \
+        --shard_id ${SHARD_ID} \
+        --explain_max_retries ${EXPLAIN_MAX_RETRIES} \
         --load_in_4bit \
         --hateful_only
 
 echo ""
-echo "Stage 1 job submitted. Wait for completion before running build_stage2_dataset."
+echo "Explanations-only shard job submitted."
 echo "Follow logs with:"
-echo "  runai logs hmr-stage1 -p course-ee-559-${USERNAME} --follow"
+echo "  runai logs ${JOB_NAME} -p course-ee-559-${USERNAME} --follow"
