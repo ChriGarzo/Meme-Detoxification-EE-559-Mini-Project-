@@ -6,7 +6,7 @@ detoxification) before meme-specific conditioning fine-tune in Phase 2.
 
 Key design decisions
 --------------------
-1.  Input format is ``[T: null] [A: null] [M: null] | {toxic_text}`` --
+1.  Input format is ``[T: null] [V: null] [M: null] | {toxic_text}`` --
     IDENTICAL to the Phase 2 format so the model learns the conditioning
     prefix during Phase 1.  The original code used ``</s>`` as the
     separator, which is processed differently by BART's tokeniser and
@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 # Must match the format produced by format_input(..., condition="none")
 # in train_stage2_phase2.py so the model sees a consistent input format
 # across both phases.
-NULL_PREFIX = "[T: null] [A: null] [M: null]"
+NULL_PREFIX = "[T: null] [V: null] [M: null]"
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ class ParaDetoxDataset(Dataset):
         ex = self.examples[idx]
 
         # Use the SAME format as Phase 2 (pipe separator, null fields).
-        # Phase 2 extends this by filling in [T:], [A:], [M:] for meme
+        # Phase 2 extends this by filling in [T:], [V:], [M:] for meme
         # examples; Phase 1 teaches the model that the null-conditioned
         # format always means "detoxify the text after the |".
         input_text  = f"{NULL_PREFIX} | {ex['toxic']}"

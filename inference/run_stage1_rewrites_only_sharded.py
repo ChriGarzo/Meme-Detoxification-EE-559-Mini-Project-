@@ -119,6 +119,15 @@ def quality_reject_reason(
     return ""
 
 
+def _safe_float(value: Any, default: float = -1.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def candidate_rank_key(candidate: Dict[str, Any]) -> Tuple[float, ...]:
     format_valid = int(candidate.get("format_valid", True))
     has_text = int(bool(candidate.get("rewrite", "").strip()))
@@ -132,9 +141,9 @@ def candidate_rank_key(candidate: Dict[str, Any]) -> Tuple[float, ...]:
         passes_all,
         passes_safety,
         passes_similarity,
-        float(candidate.get("bertscore", -1.0)),
-        float(candidate.get("sta_score", -1.0)),
-        float(candidate.get("toxicity_drop", -1.0)),
+        _safe_float(candidate.get("bertscore"), default=-1.0),
+        _safe_float(candidate.get("sta_score"), default=-1.0),
+        _safe_float(candidate.get("toxicity_drop"), default=-1.0),
         length_penalty,
         -len(candidate["rewrite"]),
     )

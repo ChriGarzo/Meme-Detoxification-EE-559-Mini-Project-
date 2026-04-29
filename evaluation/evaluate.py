@@ -190,7 +190,7 @@ def estimate_params(system_name: str) -> float:
         "detoxllm_text_only": 7.0,  # DetoxLLM 7B
         "bart_none": 0.4,  # BART base
         "bart_target_only": 0.4,
-        "bart_attack_only": 0.4,
+        "bart_visual_only": 0.4,
         "bart_full": 0.4,
         "clip_proxy_bart": 0.4 + 0.428,  # BART + CLIP ViT
     }
@@ -253,7 +253,7 @@ def main():
         "detoxllm_text_only",
         "bart_none",
         "bart_target_only",
-        "bart_attack_only",
+        "bart_visual_only",
         "bart_full",
         "clip_proxy_bart",
     ]

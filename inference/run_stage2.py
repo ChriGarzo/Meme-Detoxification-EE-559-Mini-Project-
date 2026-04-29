@@ -71,26 +71,26 @@ def build_condition_prompt(
     Build BART encoder input string based on ablation condition.
 
     Format mirrors MemeRewriter.format_input (models/rewriter.py):
-      full:        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] | {text}
-      target_only: [T: <target_group>] [A: null] [M: null] | {text}
-      attack_only: [T: null] [A: <attack_type>] [M: null] | {text}
-      none:        [T: null] [A: null] [M: null] | {text}
+      full:        [T: <target_group>] [V: <visual_evidence>] [M: <implicit_meaning>] | {text}
+      target_only: [T: <target_group>] [V: null] [M: null] | {text}
+      visual_only: [T: null] [V: <visual_evidence>] [M: null] | {text}
+      none:        [T: null] [V: null] [M: null] | {text}
 
     Null fields are rendered as the literal string "null" (not Python None).
     """
     explanation_str = explanation or {}
     tg = explanation_str.get("target_group") or "null"
-    at = explanation_str.get("attack_type") or "null"
+    ve = explanation_str.get("visual_evidence") or explanation_str.get("attack_type") or "null"
     im = explanation_str.get("implicit_meaning") or "null"
 
     if condition == "full":
-        prefix = f"[T: {tg}] [A: {at}] [M: {im}]"
+        prefix = f"[T: {tg}] [V: {ve}] [M: {im}]"
     elif condition == "target_only":
-        prefix = f"[T: {tg}] [A: null] [M: null]"
-    elif condition == "attack_only":
-        prefix = f"[T: null] [A: {at}] [M: null]"
+        prefix = f"[T: {tg}] [V: null] [M: null]"
+    elif condition in {"visual_only", "attack_only"}:
+        prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # 'none'
-        prefix = "[T: null] [A: null] [M: null]"
+        prefix = "[T: null] [V: null] [M: null]"
 
     return f"{prefix} | {original_text}"
 
@@ -112,9 +112,9 @@ def main():
     parser.add_argument(
         "--condition",
         type=str,
-        choices=["full", "target_only", "attack_only", "none"],
+        choices=["full", "target_only", "visual_only", "none"],
         default="full",
-        help="Ablation conditioning strategy (full | target_only | attack_only | none)"
+        help="Ablation conditioning strategy (full | target_only | visual_only | none)"
     )
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")

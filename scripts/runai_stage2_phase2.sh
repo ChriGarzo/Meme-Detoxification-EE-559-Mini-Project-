@@ -18,16 +18,16 @@ set -e
 #
 # Note: Run this AFTER runai_build_stage2_dataset.sh has completed.
 #       Submits 4 jobs (one per conditioning condition).
-#       Conditions: full | target_only | attack_only | none
-#         full        — uses all explanation fields: target_group + attack_type + implicit_meaning
-#         target_only — uses only the target_group field
-#         attack_only — uses only the attack_type field
-#         none        — no explanation conditioning (text-only baseline)
+#       Conditions: full | target_only | visual_only | none
+#         full         — uses all explanation fields: target_group + visual_evidence + implicit_meaning
+#         target_only  — uses only the target_group field
+#         visual_only  — uses only the visual_evidence field
+#         none         — no explanation conditioning (text-only baseline)
 #
-#       ParaDetox mixing: 20% of each training set is drawn from
-#       s-nlp/paradetox (clean toxic→neutral pairs) to provide a
-#       detoxification prior without a separate warm-up phase.
-#       Set --paradetox_mix_ratio 0.0 to disable.
+#       LoRA: r=32, alpha=64, dropout=0.05 applied to all attention
+#       projections (q/k/v/out_proj) and FFN layers (fc1, fc2) in both
+#       encoder and decoder (~17M trainable / 400M total, ~4.3%).
+#       No ParaDetox mixing — meme dataset only.
 # =============================================================================
 
 # --- Validate args ---
@@ -70,9 +70,9 @@ if [ ! -f "${TRAIN_SCRIPT}" ]; then
 fi
 
 # Ablation conditions (must match MemeRewriter.format_input and run_stage2.py)
-CONDITIONS=("full" "target_only" "attack_only" "none")
+CONDITIONS=("full" "target_only" "visual_only" "none")
 
-echo "=== Stage 2: BART Conditioning Fine-tune (with ParaDetox mixing) ==="
+echo "=== Stage 2: BART LoRA Meme Fine-tune (meme dataset only, no ParaDetox) ==="
 echo "  User:       ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:       ${MODE_LABEL}"
 echo "  Code root:  ${CODE_ROOT}"
@@ -101,12 +101,15 @@ for CONDITION in "${CONDITIONS[@]}"; do
             --dataset_dir /scratch/hmr_stage2_dataset \
             --output_dir /scratch/hmr_stage2_phase2_${CONDITION}_checkpoint \
             --hf_cache /scratch/hf_cache \
+            --stage1_output_dir /scratch/hmr_stage1_output \
             --num_train_epochs 5 \
             --per_device_train_batch_size 8 \
-            --learning_rate 1e-5 \
-            --warmup_steps 200 \
+            --learning_rate 1e-4 \
+            --warmup_steps 50 \
             --weight_decay 0.01 \
-            --paradetox_mix_ratio 0.2 \
+            --lora_r 32 \
+            --lora_alpha 64 \
+            --lora_dropout 0.05 \
             --seed 42
 done
 

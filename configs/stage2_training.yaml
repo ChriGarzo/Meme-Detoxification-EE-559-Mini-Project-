@@ -18,9 +18,9 @@ phase1:
 
 # Phase 2: Meme conditioning fine-tune
 phase2:
-  learning_rate: 2.0e-5
+  learning_rate: 3.0e-4
   batch_size: 8
-  num_epochs: 3
+  num_epochs: 5
   warmup_steps: 100
   weight_decay: 0.01
   fp16: true
@@ -32,7 +32,7 @@ phase2:
   conditions:
     - full
     - target_only
-    - attack_only
+    - visual_only
     - none
 
 # Proxy network training

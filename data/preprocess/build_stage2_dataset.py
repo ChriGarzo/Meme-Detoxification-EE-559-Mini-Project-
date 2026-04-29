@@ -1,31 +1,26 @@
 """
-Build BART training dataset from Stage 1 LLaVA outputs.
+Build Stage 2 BART training dataset from merged Stage 1 pseudo-rewrites.
 
-This script:
-1. Reads Stage 1 JSONL outputs (explanations + pseudo_rewrites)
-2. Combines all datasets into training/validation splits (90/10)
-3. Filters by BERTScore > 0.4
-4. Creates prefixed input format: [T: ...] [A: ...] [M: ...] | {text}
-5. Outputs train.jsonl and val.jsonl with standardized fields
+Pipeline:
+1. Read `train_pseudo_rewrites_merged.jsonl`
+2. Filter out rows with parse errors
+3. Keep only rows with strictly positive toxicity drop
+4. Build Stage 2 records
+5. Split train/val and write JSONL outputs
 """
 
 import argparse
 import json
 import logging
-import os
 import random
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict
+from typing import Any, Tuple, List, Dict
 
-import numpy as np
-from tqdm import tqdm
-
-# Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from utils.debug import is_debug_mode, set_seeds
+from utils.debug import set_seeds
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +33,7 @@ def make_debug_dataset() -> List[Dict]:
             "id": "debug_001",
             "original_text": "that's disgusting",
             "target_group": "race_ethnicity",
-            "attack_type": "contempt",
+            "visual_evidence": "person with insulting hand gesture",
             "explanation": "This uses contempt language targeting a racial group",
             "pseudo_rewrite": "I disagree with that viewpoint",
             "bert_score": 0.85
@@ -47,7 +42,7 @@ def make_debug_dataset() -> List[Dict]:
             "id": "debug_002",
             "original_text": "stupid people",
             "target_group": "disability",
-            "attack_type": "mocking",
+            "visual_evidence": "mocking face expression",
             "explanation": "This mocks disabled individuals",
             "pseudo_rewrite": "people with different perspectives",
             "bert_score": 0.72
@@ -56,95 +51,105 @@ def make_debug_dataset() -> List[Dict]:
     return debug_examples
 
 
-def load_stage1_outputs(stage1_dir: str) -> List[Dict]:
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_parse_error(row: Dict) -> bool:
+    expl = row.get("explanation")
+    if isinstance(expl, dict):
+        return bool(expl.get("parse_error", False))
+    return bool(row.get("parse_error", False))
+
+
+def load_merged_rewrites(merged_path: str) -> List[Dict]:
+    """Load and normalize rows from train_pseudo_rewrites_merged.jsonl."""
+    path = Path(merged_path)
+    if not path.exists():
+        logger.error(f"Merged pseudo-rewrite file not found: {path}")
+        return []
+
+    rows: List[Dict] = []
+    dataset_name = path.stem.replace("_pseudo_rewrites_merged", "")
+    with open(path, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Invalid JSON at line {line_num} in {path.name}: {e}")
+                continue
+            if not isinstance(raw, dict):
+                continue
+
+            expl = raw.get("explanation") or {}
+            if not isinstance(expl, dict):
+                expl = {}
+
+            normalized = {
+                "id": raw.get("id", ""),
+                "image_path": raw.get("image_path", ""),
+                "original_text": raw.get("original_text", ""),
+                "target_group": raw.get("target_group") or expl.get("target_group") or "null",
+                "visual_evidence": raw.get("visual_evidence") or expl.get("visual_evidence") or "null",
+                "explanation": raw.get("implicit_meaning") or expl.get("implicit_meaning") or "",
+                "pseudo_rewrite": raw.get("pseudo_rewrite", ""),
+                "toxicity_drop": raw.get("toxicity_drop"),
+                "parse_error": _extract_parse_error(raw),
+                "dataset": raw.get("dataset", dataset_name),
+            }
+            rows.append(normalized)
+
+    logger.info(f"Loaded {len(rows)} rows from {path}")
+    return rows
+
+
+def filter_rows_for_stage2(
+    examples: List[Dict],
+    min_toxicity_drop: float = 0.0,
+) -> tuple[List[Dict], Dict[str, int]]:
     """
-    Load all Stage 1 pseudo-rewrite JSONL outputs from a tree of per-dataset
-    sub-directories.
-
-    run_stage1.py writes files named:
-        {stage1_dir}/{dataset}/{dataset}_pseudo_rewrites.jsonl
-
-    Each line contains:
-    {
-        "id": "...",
-        "image_path": "...",
-        "original_text": "...",
-        "explanation": {
-            "target_group": "...",
-            "attack_type": "...",
-            "implicit_meaning": "..."
-        },
-        "pseudo_rewrite": "...",
-        "sta_score": 0.xx,
-        "bertscore": 0.xx       ← note: "bertscore" not "bert_score"
+    Keep only examples with:
+    1) parse_error == False
+    2) toxicity_drop > min_toxicity_drop
+    """
+    kept: List[Dict] = []
+    dropped = {
+        "parse_error": 0,
+        "missing_toxicity_drop": 0,
+        "non_positive_toxicity_drop": 0,
     }
 
-    This function normalises the field names so downstream code uses
-    a consistent schema.
-    """
-    stage1_dir = Path(stage1_dir)
-    if not stage1_dir.is_dir():
-        logger.error(f"Stage 1 directory not found: {stage1_dir}")
-        return []
+    for ex in examples:
+        if bool(ex.get("parse_error", False)):
+            dropped["parse_error"] += 1
+            continue
 
-    examples = []
-    # Collect *_pseudo_rewrites.jsonl from any depth
-    jsonl_files = sorted(stage1_dir.rglob("*_pseudo_rewrites.jsonl"))
+        tox_drop = _safe_float(ex.get("toxicity_drop"))
+        if tox_drop is None:
+            dropped["missing_toxicity_drop"] += 1
+            continue
 
-    if not jsonl_files:
-        logger.warning(
-            f"No *_pseudo_rewrites.jsonl files found under {stage1_dir}. "
-            "Make sure Stage 1 has completed for all datasets."
-        )
-        return []
+        if tox_drop <= min_toxicity_drop:
+            dropped["non_positive_toxicity_drop"] += 1
+            continue
 
-    for jsonl_path in tqdm(jsonl_files, desc="Loading Stage 1 pseudo-rewrites"):
-        logger.info(f"Loading {jsonl_path}")
-        # Derive dataset name from the file stem: "{dataset}_pseudo_rewrites"
-        dataset_name = jsonl_path.stem.replace("_pseudo_rewrites", "")
+        kept.append(ex)
 
-        with open(jsonl_path, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError as e:
-                    logger.warning(
-                        f"Failed to parse line {line_num} in {jsonl_path.name}: {e}"
-                    )
-                    continue
-
-                # Normalise schema: flatten explanation sub-fields to top level
-                expl = raw.get("explanation") or {}
-                example = {
-                    "id": raw.get("id", ""),
-                    "image_path": raw.get("image_path", ""),
-                    "original_text": raw.get("original_text", ""),
-                    "target_group": expl.get("target_group") or "null",
-                    "attack_type": expl.get("attack_type") or "null",
-                    "explanation": expl.get("implicit_meaning") or "",
-                    "pseudo_rewrite": raw.get("pseudo_rewrite", ""),
-                    # Accept both "bertscore" (stage1 output) and "bert_score"
-                    "bert_score": raw.get("bertscore", raw.get("bert_score", 0.0)),
-                    "dataset": raw.get("dataset", dataset_name),
-                }
-                examples.append(example)
-
-    logger.info(f"Loaded {len(examples)} pseudo-rewrite examples from Stage 1")
-    return examples
-
-
-def filter_by_bert_score(examples: List[Dict], min_score: float = 0.4) -> List[Dict]:
-    """Filter examples by minimum BERTScore."""
-    filtered = [
-        ex for ex in examples
-        if ex.get("bert_score", 0) >= min_score
-    ]
-    removed = len(examples) - len(filtered)
-    logger.info(f"Filtered by BERTScore > {min_score}: removed {removed} examples, kept {len(filtered)}")
-    return filtered
+    logger.info(
+        "Stage 2 filtering complete: kept %d / %d rows (dropped: %s)",
+        len(kept),
+        len(examples),
+        dropped,
+    )
+    return kept, dropped
 
 
 URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+\b")
@@ -238,21 +243,21 @@ def is_valid_rewrite_text(rewrite: str, original_text: str) -> tuple[bool, str]:
 
 def create_input_format(
     target_group: str,
-    attack_type: str,
+    visual_evidence: str,
     implicit_meaning: str,
     meme_text: str
 ) -> str:
     """
     Create prefixed BART encoder input (full conditioning format):
 
-        [T: <target_group>] [A: <attack_type>] [M: <implicit_meaning>] | <meme_text>
+        [T: <target_group>] [V: <visual_evidence>] [M: <implicit_meaning>] | <meme_text>
 
     Null fields are rendered as the literal string "null".
     This matches MemeRewriter.format_input(condition="full") in models/rewriter.py.
 
     Args:
         target_group:     e.g. "race_ethnicity" or "null"
-        attack_type:      e.g. "contempt" or "null"
+        visual_evidence:  short visual cue from explainer or "null"
         implicit_meaning: one-sentence implicit meaning from LLaVA, or ""
         meme_text:        original meme text
 
@@ -260,9 +265,9 @@ def create_input_format(
         Formatted input string ready for BART tokenisation
     """
     tg = target_group or "null"
-    at = attack_type or "null"
+    ve = visual_evidence or "null"
     im = implicit_meaning or "null"
-    return f"[T: {tg}] [A: {at}] [M: {im}] | {meme_text}"
+    return f"[T: {tg}] [V: {ve}] [M: {im}] | {meme_text}"
 
 
 def build_training_data(examples: List[Dict]) -> List[Dict]:
@@ -278,7 +283,7 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
     for example in examples:
         original_text = example.get("original_text", "")
         target_group = example.get("target_group") or "null"
-        attack_type = example.get("attack_type") or "null"
+        visual_evidence = example.get("visual_evidence") or "null"
         implicit_meaning = example.get("explanation", "") or "null"
         pseudo_rewrite = sanitize_rewrite_text(example.get("pseudo_rewrite", ""))
         dataset = example.get("dataset", "unknown")
@@ -294,11 +299,12 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
             rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
             continue
 
-        input_text = create_input_format(target_group, attack_type, implicit_meaning, original_text)
-        condition = f"{target_group}_{attack_type}"
+        input_text = create_input_format(target_group, visual_evidence, implicit_meaning, original_text)
+        condition = target_group
 
         training_record = {
             "id": example_id,
+            "image_path": example.get("image_path", ""),
             # Pre-formatted full-condition input (used as-is for condition=full)
             "input_text": input_text,
             "target_text": pseudo_rewrite,
@@ -306,7 +312,7 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
             # reformat the input for conditions other than 'full'
             "original_text": original_text,
             "target_group": target_group,
-            "attack_type": attack_type,
+            "visual_evidence": visual_evidence,
             "implicit_meaning": implicit_meaning,
             "condition": condition,
             "dataset": dataset
@@ -354,13 +360,19 @@ def write_jsonl(examples: List[Dict], output_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build BART training dataset from Stage 1 LLaVA outputs"
+        description="Build Stage 2 dataset from merged Stage 1 pseudo-rewrites"
     )
     parser.add_argument(
         "--stage1_dir",
         type=str,
         required=True,
-        help="Directory containing Stage 1 JSONL outputs"
+        help="Directory containing train_pseudo_rewrites_merged.jsonl"
+    )
+    parser.add_argument(
+        "--rewrites_path",
+        type=str,
+        default="",
+        help="Path to merged rewrites JSONL (default: <stage1_dir>/train_pseudo_rewrites_merged.jsonl)"
     )
     parser.add_argument(
         "--output_dir",
@@ -371,13 +383,31 @@ def main():
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Debug mode: use make_debug_dataset(), skip BERTScore filtering"
+        help="Debug mode: use make_debug_dataset(), skip parse/toxicity filtering"
     )
     parser.add_argument(
         "--hf_cache",
         type=str,
         default=None,
-        help="HuggingFace cache directory (default: ~/.cache/huggingface)"
+        help="Deprecated/ignored. Kept for backward compatibility with existing job scripts."
+    )
+    parser.add_argument(
+        "--min_toxicity_drop",
+        type=float,
+        default=0.0,
+        help="Minimum required toxicity drop; rows must satisfy toxicity_drop > this value"
+    )
+    parser.add_argument(
+        "--train_ratio",
+        type=float,
+        default=0.9,
+        help="Train split ratio after filtering"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility"
     )
 
     args = parser.parse_args()
@@ -388,15 +418,29 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    # Set seeds for reproducibility
-    set_seeds(42)
+    # Set seeds for reproducibility. In lightweight preprocessing environments
+    # torch may be unavailable; keep deterministic behavior with random.
+    try:
+        set_seeds(args.seed)
+    except ModuleNotFoundError as e:
+        logger.warning("set_seeds fallback (missing dependency): %s", e)
+        random.seed(args.seed)
 
     print(f"\n{'='*60}")
     print(f"  Build Stage 2 Dataset")
     print(f"  Stage 1 dir: {args.stage1_dir}")
+    default_merged = str(Path(args.stage1_dir) / "train_pseudo_rewrites_merged.jsonl")
+    rewrites_path = args.rewrites_path.strip() or default_merged
+    print(f"  Rewrites:    {rewrites_path}")
     print(f"  Output dir:  {args.output_dir}")
+    print(f"  Min tox drop > {args.min_toxicity_drop}")
+    print(f"  Train ratio: {args.train_ratio}")
+    print(f"  Seed:        {args.seed}")
     print(f"  Debug:       {args.debug}")
     print(f"{'='*60}\n")
+
+    if args.hf_cache:
+        logger.info("--hf_cache is ignored by build_stage2_dataset.py (kept for compatibility).")
 
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -404,18 +448,23 @@ def main():
 
     # Load data
     if args.debug:
-        logger.warning("DEBUG MODE ENABLED: Using small debug dataset, skipping BERTScore filtering")
+        logger.warning("DEBUG MODE ENABLED: Using small debug dataset, skipping parse/toxicity filtering")
         examples = make_debug_dataset()
+        total_loaded = len(examples)
+        dropped_counts = {"parse_error": 0, "missing_toxicity_drop": 0, "non_positive_toxicity_drop": 0}
     else:
-        examples = load_stage1_outputs(args.stage1_dir)
+        examples = load_merged_rewrites(rewrites_path)
         if not examples:
-            logger.error("No examples loaded from Stage 1")
+            logger.error("No examples loaded from merged rewrites file")
             return 1
 
-        # Filter by BERTScore
-        examples = filter_by_bert_score(examples, min_score=0.4)
+        total_loaded = len(examples)
+        examples, dropped_counts = filter_rows_for_stage2(
+            examples,
+            min_toxicity_drop=args.min_toxicity_drop,
+        )
         if not examples:
-            logger.error("All examples filtered out by BERTScore threshold")
+            logger.error("All examples filtered out by parse_error/toxicity_drop conditions")
             return 1
 
     # Build training data
@@ -425,7 +474,11 @@ def main():
         return 1
 
     # Split into train/val
-    train_data, val_data = split_train_val(training_data, train_ratio=0.9)
+    train_data, val_data = split_train_val(
+        training_data,
+        train_ratio=args.train_ratio,
+        seed=args.seed,
+    )
 
     # Write outputs
     train_path = output_dir / "train.jsonl"
@@ -438,26 +491,35 @@ def main():
     from collections import Counter
     dataset_counts     = Counter(e.get("dataset",      "unknown") for e in training_data)
     target_group_counts = Counter(e.get("target_group", "null")   for e in training_data)
-    attack_type_counts  = Counter(e.get("attack_type",  "null")   for e in training_data)
+    visual_evidence_presence = Counter(
+        "present" if (e.get("visual_evidence") and e.get("visual_evidence") != "null") else "null"
+        for e in training_data
+    )
 
     # Save dataset_statistics.json — persists all key distribution info for the report
     stats = {
         "build_config": {
             "stage1_dir": args.stage1_dir,
-            "bertscore_threshold": 0.4,
-            "train_val_ratio": 0.9,
-            "seed": 42,
+            "rewrites_path": rewrites_path,
+            "require_parse_error_false": True,
+            "min_toxicity_drop_exclusive": args.min_toxicity_drop,
+            "train_val_ratio": args.train_ratio,
+            "seed": args.seed,
             "debug": args.debug,
         },
         "counts": {
-            "total_loaded_from_stage1": len(examples),
-            "after_bertscore_filter": len(training_data),
+            "total_loaded_from_merged_rewrites": total_loaded,
+            "dropped_parse_error": dropped_counts["parse_error"],
+            "dropped_missing_toxicity_drop": dropped_counts["missing_toxicity_drop"],
+            "dropped_non_positive_toxicity_drop": dropped_counts["non_positive_toxicity_drop"],
+            "after_parse_and_toxicity_filter": len(examples),
+            "after_rewrite_text_quality_filter": len(training_data),
             "train_samples": len(train_data),
             "val_samples": len(val_data),
         },
         "dataset_source_distribution": dict(dataset_counts.most_common()),
         "target_group_distribution": dict(target_group_counts.most_common()),
-        "attack_type_distribution": dict(attack_type_counts.most_common()),
+        "visual_evidence_presence": dict(visual_evidence_presence.most_common()),
     }
     stats_path = output_dir / "dataset_statistics.json"
     with open(stats_path, "w", encoding="utf-8") as f:
@@ -468,8 +530,13 @@ def main():
     print("\n" + "=" * 80)
     print("STAGE 2 DATASET BUILD SUMMARY")
     print("=" * 80)
-    print(f"Total examples loaded from Stage 1: {len(examples)}")
-    print(f"After BERTScore filter:             {len(training_data)}")
+    print(f"Total examples loaded from merged rewrites:  {total_loaded}")
+    if not args.debug:
+        print(f"Dropped parse_error rows:                    {dropped_counts['parse_error']}")
+        print(f"Dropped rows with missing toxicity_drop:     {dropped_counts['missing_toxicity_drop']}")
+        print(f"Dropped rows with toxicity_drop <= {args.min_toxicity_drop}: {dropped_counts['non_positive_toxicity_drop']}")
+        print(f"After parse/toxicity filter:                 {len(examples)}")
+    print(f"After rewrite text quality filter:           {len(training_data)}")
     print(f"  Training examples:                {len(train_data)}")
     print(f"  Validation examples:              {len(val_data)}")
     print(f"\nBreakdown by source dataset:")
@@ -478,9 +545,9 @@ def main():
     print(f"\nBreakdown by target group:")
     for tg, count in target_group_counts.most_common():
         print(f"  {tg:<25} {count:>6} examples")
-    print(f"\nBreakdown by attack type:")
-    for at, count in attack_type_counts.most_common():
-        print(f"  {at:<25} {count:>6} examples")
+    print(f"\nVisual evidence field:")
+    for label, count in visual_evidence_presence.most_common():
+        print(f"  {label:<25} {count:>6} examples")
     print(f"\nOutput directory: {output_dir}")
     print(f"  train.jsonl:            {len(train_data)} examples")
     print(f"  val.jsonl:              {len(val_data)} examples")

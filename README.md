@@ -2,7 +2,7 @@
 
 **EE-559 Deep Learning — EPFL, Group 31**
 
-A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured hate explanations and pseudo-rewrites, then fine-tunes BART-large (400M) directly as a lightweight student for meme text detoxification. Four conditioning ablations are evaluated: `full`, `target_only`, `attack_only`, `none`.
+A pipeline that uses LLaVA-Next (7B) as a teacher model to generate structured hate explanations and pseudo-rewrites, then fine-tunes BART-large (400M) directly as a lightweight student for meme text detoxification. Four conditioning ablations are evaluated: `full`, `target_only`, `visual_only`, `none`.
 
 ---
 
@@ -39,13 +39,16 @@ Stage 1B ─── LLaVA-Next pseudo-rewrites (sharded)  [GPU]
                │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
                │  Input format: [T: {target}] [A: {attack}] [M: {meaning}] </s> {text}
                ▼
-Stage 2 ───── BART meme fine-tuning (×4 conditions in parallel)  [GPU]
-               │  Conditions: full | target_only | attack_only | none
-               │  5 epochs, lr=2e-5, starts directly from facebook/bart-large
-               │  Note: a ParaDetox warm-up phase (Phase 1) was originally
-               │  included but was found to cause degenerate autoregressive
-               │  generation at inference time (teacher-forcing overfitting),
-               │  and has been removed from the main pipeline.
+Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel)  [GPU]
+               │  Conditions: full | target_only | visual_only | none
+               │  LoRA: r=32, alpha=64, dropout=0.05 on q/k/v/out_proj + fc1/fc2
+               │  ~17M trainable / 400M total parameters (~4.3%)
+               │  5 epochs, lr=3e-4, starts directly from facebook/bart-large
+               │  Evaluation metrics per checkpoint:
+               │    ROUGE-1/2/L, collapse rate, text STA (RoBERTa),
+               │    multimodal STA (VisualBERT image+text, eval-only)
+               │  5 qualitative (original → generated → reference) examples logged
+               │  Output: merged BART checkpoint + lora_adapter/ subdirectory
                ▼
 Stage 4 ──── Proxy network training  [GPU]
                │  3-layer MLP: concat(CLIP image + CLIP text) [1536-dim]
@@ -59,8 +62,10 @@ Stage 3 ──── Evaluation  [GPU]
 
 **Models used:**
 - `llava-hf/llava-v1.6-mistral-7b-hf` — Stage 1 teacher
-- `facebook/bart-large` — Stage 2 student (fine-tuned)
-- `openai/clip-vit-large-patch14` — Stage 0 filter + Stage 4 proxy (768-dim embeddings)
+- `facebook/bart-large` — Stage 2 student (LoRA fine-tuned, ~4.3% trainable params)
+- `openai/clip-vit-large-patch14` — Stage 0 filter + Stage 4 proxy + Stage 2 eval visual features
+- `chiragmittal92/visualbert-hateful-memes-finetuned-model` — Stage 2 multimodal STA metric (eval-only)
+- `s-nlp/roberta_toxicity_classifier` — Stage 2 text STA metric
 
 ---
 
@@ -97,7 +102,8 @@ hateful_meme_rewriting/
 │   └── run_proxy_pipeline.py          ← VLM-free inference via proxy
 │
 ├── training/
-│   ├── train_stage2_phase2.py         ← Meme fine-tuning (×4 conditions, starts from bart-large directly)
+│   ├── train_stage2_phase1.py         ← ParaDetox warm-up (kept for reference, not run in current pipeline)
+│   ├── train_stage2_phase2.py         ← LoRA meme fine-tuning (×4 conditions, starts from bart-large directly)
 │   └── train_proxy.py                 ← Proxy MLP training
 │
 ├── evaluation/
@@ -167,7 +173,7 @@ Manual request required: https://forms.gle/AGWMiGicBHiQx4q98
 Download from: https://gombru.github.io/2019/10/09/MMHS/
 
 ### ParaDetox
-`s-nlp/paradetox` is loaded automatically at training time by `train_stage2_phase2.py` (via the `--paradetox_mix_ratio` flag) and mixed into the training data as a detoxification prior. No manual download is needed — it is fetched from HuggingFace into the shared `/scratch/hf_cache`.
+Not used in the current pipeline. Stage 2 trains exclusively on the meme pseudo-rewrite dataset produced by Stage 1. LoRA's small parameter footprint reduces overfitting risk without requiring external data mixing.
 
 ---
 
@@ -351,9 +357,9 @@ and will skip examples that already exist in shard rewrite outputs.
 **Merge pseudo-rewrite shards**  
 Run once after all Stage 1B shards finish:
 ```bash
-python inference/merge_stage1_rewrites_shards.py \
+python python inference/merge_stage1_rewrites_shards.py \
   --dataset train \
-  --input_dir /scratch/hmr_stage1_output \
+  --input_dir /mnt/course-ee-559/rcp-caas-ee-559-g31/scratch-g31/hmr_stage1_output \
   --num_shards 8
 ```
 This creates:
@@ -364,11 +370,17 @@ This creates:
 bash scripts/runai_build_stage2_dataset.sh <UID>
 ```
 
-**Stage 2 — BART meme fine-tuning** (4 jobs submitted in parallel, one per condition)
+**Stage 2 — BART LoRA meme fine-tuning** (4 jobs submitted in parallel, one per condition)
 ```bash
 bash scripts/runai_stage2_phase2.sh <UID>
 ```
-Trains four separate checkpoints starting directly from `facebook/bart-large`: `full`, `target_only`, `attack_only`, `none`.
+Trains four separate LoRA-adapted checkpoints starting directly from `facebook/bart-large`: `full`, `target_only`, `visual_only`, `none`.
+
+Each job applies LoRA (r=32, alpha=64, dropout=0.05) to all attention projections and FFN layers, giving ~17M trainable parameters out of 400M total. At the end of training, the adapter is merged back into the base model and saved to the checkpoint directory. The raw LoRA adapter weights are preserved in `lora_adapter/` for potential future reuse.
+
+Metrics tracked at every eval checkpoint: ROUGE-1/2/L, collapse rate, text STA (RoBERTa toxicity), and multimodal STA (VisualBERT with CLIP image features — images are used for this metric only and never influence gradients). Five qualitative examples (original → generated → reference) are logged at each eval step.
+
+Note: Stage 2 Phase 1 (ParaDetox warm-up) is kept in `training/train_stage2_phase1.py` for reference but is not run in the current pipeline. Phase 2 starts directly from `facebook/bart-large`.
 
 **Stage 4 — Train proxy network** (wait for Stage 2 Phase 2 `full` to complete)
 ```bash
@@ -422,7 +434,7 @@ bash scripts/runai_evaluate.sh <UID>
 │   └── val.jsonl
 ├── hmr_stage2_phase2_full_checkpoint/
 ├── hmr_stage2_phase2_target_only_checkpoint/
-├── hmr_stage2_phase2_attack_only_checkpoint/
+├── hmr_stage2_phase2_visual_only_checkpoint/
 ├── hmr_stage2_phase2_none_checkpoint/
 ├── hmr_proxy_checkpoint/
 └── hmr_eval_results/
@@ -436,7 +448,7 @@ bash scripts/runai_evaluate.sh <UID>
 |-----------|------|---------|-----------|------------|
 | full      |      |         |           |            |
 | target_only |   |         |           |            |
-| attack_only |   |         |           |            |
+| visual_only |   |         |           |            |
 | none      |      |         |           |            |
 | LLaVA baseline |  |      |           |            |
 

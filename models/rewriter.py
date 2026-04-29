@@ -89,9 +89,10 @@ class MemeRewriter:
         self,
         text: str,
         target_group: Optional[str] = None,
+        visual_evidence: Optional[str] = None,
         attack_type: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
-        mode: Literal["full", "target_only", "attack_only", "none"] = "full",
+        mode: Literal["full", "target_only", "visual_only", "attack_only", "none"] = "full",
     ) -> str:
         """
         Format input text with explanation prefix tokens.
@@ -99,43 +100,46 @@ class MemeRewriter:
         Args:
             text: Original meme text
             target_group: Target group (or None)
-            attack_type: Attack type (or None)
+            visual_evidence: Visual evidence cue (or None)
+            attack_type: Deprecated alias for visual_evidence (or None)
             implicit_meaning: Implicit meaning (or None)
             mode: Formatting mode:
                 - 'full': include all fields
                 - 'target_only': include only target_group
-                - 'attack_only': include only attack_type
+                - 'visual_only'/'attack_only': include only visual_evidence
                 - 'none': all fields as null
 
         Returns:
             Formatted input string for BART
         """
+        ve_raw = visual_evidence or attack_type
         if mode == "full":
             tg = target_group or "null"
-            at = attack_type or "null"
+            ve = ve_raw or "null"
             im = implicit_meaning or "null"
         elif mode == "target_only":
             tg = target_group or "null"
-            at = "null"
+            ve = "null"
             im = "null"
-        elif mode == "attack_only":
+        elif mode in {"visual_only", "attack_only"}:
             tg = "null"
-            at = attack_type or "null"
+            ve = ve_raw or "null"
             im = "null"
         else:  # mode == "none"
             tg = "null"
-            at = "null"
+            ve = "null"
             im = "null"
 
-        return f"[T: {tg}] [A: {at}] [M: {im}] | {text}"
+        return f"[T: {tg}] [V: {ve}] [M: {im}] | {text}"
 
     def rewrite(
         self,
         text: str,
         target_group: Optional[str] = None,
+        visual_evidence: Optional[str] = None,
         attack_type: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
-        mode: Literal["full", "target_only", "attack_only", "none"] = "full",
+        mode: Literal["full", "target_only", "visual_only", "attack_only", "none"] = "full",
         max_length: int = 150,
     ) -> str:
         """
@@ -144,7 +148,8 @@ class MemeRewriter:
         Args:
             text: Original text
             target_group: Target group from explanation
-            attack_type: Attack type from explanation
+            visual_evidence: Visual evidence from explanation
+            attack_type: Deprecated alias for visual_evidence
             implicit_meaning: Implicit meaning from explanation
             mode: Explanation prefix mode
             max_length: Maximum length of generated text
@@ -158,6 +163,7 @@ class MemeRewriter:
         formatted_input = self.format_input(
             text,
             target_group=target_group,
+            visual_evidence=visual_evidence,
             attack_type=attack_type,
             implicit_meaning=implicit_meaning,
             mode=mode,
@@ -191,9 +197,10 @@ class MemeRewriter:
         self,
         texts: List[str],
         target_groups: Optional[List[Optional[str]]] = None,
+        visual_evidences: Optional[List[Optional[str]]] = None,
         attack_types: Optional[List[Optional[str]]] = None,
         implicit_meanings: Optional[List[Optional[str]]] = None,
-        mode: Literal["full", "target_only", "attack_only", "none"] = "full",
+        mode: Literal["full", "target_only", "visual_only", "attack_only", "none"] = "full",
         max_length: int = 150,
     ) -> List[str]:
         """
@@ -202,7 +209,8 @@ class MemeRewriter:
         Args:
             texts: List of original texts
             target_groups: List of target groups (or None for each)
-            attack_types: List of attack types (or None for each)
+            visual_evidences: List of visual evidence cues (or None for each)
+            attack_types: Deprecated alias for visual_evidences
             implicit_meanings: List of implicit meanings (or None for each)
             mode: Explanation prefix mode
             max_length: Maximum length of generated texts
@@ -215,18 +223,18 @@ class MemeRewriter:
 
         # Handle None inputs
         target_groups = target_groups or [None] * len(texts)
-        attack_types = attack_types or [None] * len(texts)
+        visual_evidences = visual_evidences or attack_types or [None] * len(texts)
         implicit_meanings = implicit_meanings or [None] * len(texts)
 
         results = []
-        for text, tg, at, im in zip(
-            texts, target_groups, attack_types, implicit_meanings
+        for text, tg, ve, im in zip(
+            texts, target_groups, visual_evidences, implicit_meanings
         ):
             try:
                 rewritten = self.rewrite(
                     text,
                     target_group=tg,
-                    attack_type=at,
+                    visual_evidence=ve,
                     implicit_meaning=im,
                     mode=mode,
                     max_length=max_length,
@@ -242,9 +250,10 @@ class MemeRewriter:
         self,
         text: str,
         target_group: Optional[str] = None,
+        visual_evidence: Optional[str] = None,
         attack_type: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
-        mode: Literal["full", "target_only", "attack_only", "none"] = "full",
+        mode: Literal["full", "target_only", "visual_only", "attack_only", "none"] = "full",
     ) -> torch.Tensor:
         """
         Extract mean-pooled encoder hidden state from BART.
@@ -252,7 +261,8 @@ class MemeRewriter:
         Args:
             text: Input text
             target_group: Target group from explanation
-            attack_type: Attack type from explanation
+            visual_evidence: Visual evidence from explanation
+            attack_type: Deprecated alias for visual_evidence
             implicit_meaning: Implicit meaning from explanation
             mode: Explanation prefix mode
 
@@ -265,6 +275,7 @@ class MemeRewriter:
         formatted_input = self.format_input(
             text,
             target_group=target_group,
+            visual_evidence=visual_evidence,
             attack_type=attack_type,
             implicit_meaning=implicit_meaning,
             mode=mode,
@@ -311,7 +322,7 @@ class MemeRewriter:
         Generate rewrites from pre-formatted input strings.
 
         Use this when the caller has already built the full BART encoder string
-        (e.g. '[T: ...] [A: ...] [M: ...] | {text}') and does NOT want
+        (e.g. '[T: ...] [V: ...] [M: ...] | {text}') and does NOT want
         format_input() to be applied again.
 
         Args:
