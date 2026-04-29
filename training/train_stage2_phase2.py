@@ -544,12 +544,47 @@ def main():
     if n_with_images > 0:
         try:
             logger.info(f"Loading VisualBERT from {mm_model_id}...")
-            from transformers import AutoModel
-            vb_model = AutoModel.from_pretrained(
-                mm_model_id,
-                trust_remote_code=True,
-                cache_dir=args.hf_cache,
-            ).to(device).float().eval()
+            from transformers import VisualBertModel, VisualBertConfig
+            import torch.nn as nn
+            from huggingface_hub import hf_hub_download
+
+            class _VBClassifier(nn.Module):
+                """Wrapper matching chiragmittal92/visualbert-hateful-memes-finetuned-model.
+                That checkpoint was saved with self.visualbert = VisualBertModel(...)
+                and self.classifier = Linear(hidden_size, 2), so its state-dict keys
+                carry the 'visualbert.' prefix that bare VisualBertModel does not expect.
+                """
+                def __init__(self, config):
+                    super().__init__()
+                    self.visualbert = VisualBertModel(config)
+                    self.classifier = nn.Linear(config.hidden_size, 2)
+
+                def forward(self, input_ids, attention_mask, visual_embeds, **kwargs):
+                    out = self.visualbert(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        visual_embeds=visual_embeds,
+                        **kwargs,
+                    )
+                    return self.classifier(out.pooler_output)  # [B, 2] logits
+
+            vb_config = VisualBertConfig.from_pretrained(mm_model_id, cache_dir=args.hf_cache)
+            vb_model = _VBClassifier(vb_config)
+
+            # Load raw weights from Hub — the checkpoint uses pytorch_model.bin
+            ckpt_path = hf_hub_download(
+                mm_model_id, "pytorch_model.bin", cache_dir=args.hf_cache
+            )
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            missing, unexpected = vb_model.load_state_dict(state_dict, strict=False)
+            if missing:
+                logger.warning(f"VisualBERT: {len(missing)} missing keys after load")
+            if unexpected:
+                logger.warning(f"VisualBERT: {len(unexpected)} unexpected keys after load")
+            else:
+                logger.info("VisualBERT weights loaded cleanly.")
+
+            vb_model = vb_model.to(device).float().eval()
             for p in vb_model.parameters():
                 p.requires_grad = False
 
