@@ -49,7 +49,7 @@ def is_debug_mode(args=None) -> bool:
 def make_debug_dataset(n: int = 16) -> List[Dict[str, Any]]:
     """
     Returns synthetic in-memory examples mimicking real dataset structure.
-    Fields: id, image_path, text, label, target_group, attack_type, explanation
+    Fields: id, image_path, text, label, target_group, visual_evidence, explanation
     image_path values do NOT need to exist on disk.
     """
     examples = []
@@ -78,28 +78,35 @@ def make_debug_dataset(n: int = 16) -> List[Dict[str, Any]]:
 
     target_groups = ["race_ethnicity", "nationality", "religion", "gender",
                      "sexual_orientation", "disability", "other"]
-    attack_types = ["contempt", "mocking", "inferiority", "slurs",
-                    "exclusion", "dehumanizing", "inciting_violence"]
+    visual_evidences = [
+        "person with insulting gesture",
+        "mocking caption over a face",
+        "group symbol used negatively",
+        "stereotyped visual juxtaposition",
+        "exclusionary sign or scene",
+        "dehumanizing comparison in the image",
+        "threatening visual framing",
+    ]
 
     for i in range(n):
         if i < n // 2:
             text = hateful_texts[i % len(hateful_texts)]
             label = 1
             tg = target_groups[i % len(target_groups)]
-            at = attack_types[i % len(attack_types)]
+            ve = visual_evidences[i % len(visual_evidences)]
             explanation = {
                 "target_group": tg,
-                "attack_type": at,
-                "implicit_meaning": f"implies {tg} are inferior through {at}"
+                "visual_evidence": ve,
+                "implicit_meaning": f"uses the visual cue to frame {tg} negatively"
             }
         else:
             text = safe_texts[i % len(safe_texts)]
             label = 0
             tg = None
-            at = None
+            ve = None
             explanation = {
                 "target_group": None,
-                "attack_type": None,
+                "visual_evidence": None,
                 "implicit_meaning": None
             }
 
@@ -110,7 +117,7 @@ def make_debug_dataset(n: int = 16) -> List[Dict[str, Any]]:
             "label": label,
             "dataset": "debug",
             "target_group": tg,
-            "attack_type": at,
+            "visual_evidence": ve,
             "explanation": explanation,
         })
 

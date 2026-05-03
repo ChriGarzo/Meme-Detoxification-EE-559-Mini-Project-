@@ -1,324 +1,465 @@
 """
-Entry point for evaluation: computes all metrics for all systems and outputs results table + JSON.
+Evaluate LLaVA teacher rewrites, non-finetuned BART, and finetuned BART outputs.
+
+Expected systems:
+  - LLaVA: Stage 1 pseudo-rewrite JSONL (`pseudo_rewrite` field)
+  - BART base: outputs from inference/run_stage2.py using facebook/bart-large
+  - BART finetuned: outputs from inference/run_stage2.py using LoRA-merged checkpoints
+
+Metrics:
+  - Text STA: non-toxic probability from s-nlp/roberta_toxicity_classifier
+  - Text STA delta: rewrite text STA - original text STA
+  - SIM: BERTScore F1 between original and rewrite
+  - CLIPScore: image/rewrite alignment
+  - VisualBERT multimodal toxicity: image + rewrite text hate probability
+  - VisualBERT multimodal STA: fraction predicted non-hateful
+  - VisualBERT hate drop: original hate probability - rewrite hate probability
 """
+
 import argparse
 import json
 import logging
+import os
+import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
-from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from tqdm import tqdm
 import torch
 
-from metrics import compute_sta, compute_sim, compute_clipscore, compute_rewrite_precision, compute_co2, compute_aggregate_J
-from utils.debug import is_debug_mode, setup_debug_mode, DEBUG_CONFIG
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from metrics import (
+    compute_clipscore,
+    compute_multimodal_hateness,
+    compute_sim,
+    compute_sta,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def setup_logging(debug: bool = False):
-    """Setup logging configuration."""
+def setup_logging(output_dir: Path, debug: bool = False) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(output_dir / "evaluate.log"),
+            logging.StreamHandler(),
+        ],
     )
 
 
-def load_rewrites(rewrites_dir: Path, system_name: str) -> Tuple[List[str], List[str]]:
-    """
-    Load original texts and rewrites from JSONL file.
+def _first_existing_jsonl(output_dir: Path) -> Optional[Path]:
+    if output_dir.is_file() and output_dir.suffix == ".jsonl":
+        return output_dir
+    if not output_dir.exists():
+        return None
 
-    Args:
-        rewrites_dir: Directory containing rewrite outputs
-        system_name: Name of the system
+    preferred_patterns = [
+        "stage2_rewrites_*.jsonl",
+        "*_rewrites.jsonl",
+        "*.jsonl",
+    ]
+    for pattern in preferred_patterns:
+        matches = sorted(output_dir.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
 
-    Returns:
-        Tuple of (originals, rewrites)
-    """
-    filepath = rewrites_dir / f"{system_name}.jsonl"
 
-    if not filepath.exists():
-        logger.warning(f"Rewrite file not found: {filepath}")
-        return [], []
+def _condition_from_path(path: Path) -> str:
+    name = path.stem
+    if name.startswith("stage2_rewrites_"):
+        return name.replace("stage2_rewrites_", "")
+    parent = path.parent.name
+    for token in ("full", "target_only", "visual_only", "none"):
+        if token in parent or token in name:
+            return token
+    return "unknown"
 
-    originals = []
-    rewrites = []
 
-    with open(filepath) as f:
-        for line in f:
-            item = json.loads(line)
-            originals.append(item["original_text"])
-            rewrites.append(item["rewrite"])
+def _as_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
-            if is_debug_mode() and len(rewrites) >= DEBUG_CONFIG["max_examples"]:
+
+def _extract_record(raw: Dict[str, Any], fallback_system: str) -> Optional[Dict[str, Any]]:
+    original = raw.get("original_text") or raw.get("text") or ""
+    rewrite = raw.get("rewrite") or raw.get("pseudo_rewrite") or raw.get("generated_text") or ""
+    image_path = raw.get("image_path") or ""
+    if not original or not rewrite:
+        return None
+
+    explanation = raw.get("explanation") or {}
+    if not isinstance(explanation, dict):
+        explanation = {}
+
+    return {
+        "id": raw.get("id") or raw.get("idx"),
+        "system": fallback_system,
+        "image_path": image_path,
+        "original_text": str(original),
+        "rewrite": str(rewrite),
+        "target_group": raw.get("target_group") or explanation.get("target_group"),
+        "visual_evidence": raw.get("visual_evidence") or explanation.get("visual_evidence"),
+        "implicit_meaning": raw.get("implicit_meaning") or explanation.get("implicit_meaning"),
+        "original_toxicity": _as_float(raw.get("original_toxicity")),
+        "rewrite_toxicity": _as_float(raw.get("rewrite_toxicity")),
+        "toxicity_drop": _as_float(raw.get("toxicity_drop")),
+    }
+
+
+def load_validation_teacher_records(path: Path, max_examples: Optional[int]) -> List[Dict[str, Any]]:
+    """Load Stage 2 validation rows as the LLaVA-teacher/reference system."""
+    records: List[Dict[str, Any]] = []
+    if not path.exists():
+        logger.warning("Missing validation JSONL: %s", path)
+        return records
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping invalid JSON in %s line %d: %s", path, line_num, exc)
+                continue
+            original = raw.get("original_text") or raw.get("text") or ""
+            rewrite = raw.get("target_text") or raw.get("pseudo_rewrite") or ""
+            if not original or not rewrite:
+                continue
+            records.append({
+                "id": raw.get("id"),
+                "system": "llava_teacher",
+                "image_path": raw.get("image_path") or "",
+                "original_text": str(original),
+                "rewrite": str(rewrite),
+                "target_group": raw.get("target_group"),
+                "visual_evidence": raw.get("visual_evidence"),
+                "implicit_meaning": raw.get("implicit_meaning"),
+                "original_toxicity": _as_float(raw.get("original_toxicity")),
+                "rewrite_toxicity": _as_float(raw.get("rewrite_toxicity")),
+                "toxicity_drop": _as_float(raw.get("stage1_toxicity_drop") or raw.get("toxicity_drop")),
+            })
+            if max_examples and len(records) >= max_examples:
                 break
 
-    logger.info(f"Loaded {len(rewrites)} examples from {system_name}")
-    return originals, rewrites
+    logger.info("Loaded %d validation teacher records from %s", len(records), path)
+    return records
 
 
-def load_images(images_dir: Path, rewrite_ids: List[str]) -> List[Path]:
-    """Load image paths."""
-    images = []
-    for idx in rewrite_ids:
-        img_path = images_dir / f"{idx}.jpg"
-        if not img_path.exists():
-            img_path = images_dir / f"{idx}.png"
-        if img_path.exists():
-            images.append(img_path)
-    return images
+def load_system_records(
+    path: Path,
+    system_name: str,
+    max_examples: Optional[int],
+    id_filter: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    if not path.exists():
+        logger.warning("Missing JSONL for %s: %s", system_name, path)
+        return records
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping invalid JSON in %s line %d: %s", path, line_num, exc)
+                continue
+            if not isinstance(raw, dict):
+                continue
+            if id_filter is not None and str(raw.get("id") or raw.get("idx")) not in id_filter:
+                continue
+            rec = _extract_record(raw, system_name)
+            if rec is not None:
+                rec["system"] = system_name
+                records.append(rec)
+            if max_examples and len(records) >= max_examples:
+                break
+
+    logger.info("Loaded %d records for %s from %s", len(records), system_name, path)
+    return records
 
 
-def load_stage1_outputs(stage1_dir: Path) -> Dict:
-    """Load Stage 1 explanations."""
-    explanations = {}
-    if not stage1_dir.exists():
-        logger.warning(f"Stage 1 directory not found: {stage1_dir}")
-        return explanations
+def discover_stage2_systems(
+    dirs: List[Path],
+    prefix: str,
+    max_examples: Optional[int],
+    id_filter: Optional[set] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    systems: Dict[str, List[Dict[str, Any]]] = {}
+    for output_dir in dirs:
+        jsonl_path = _first_existing_jsonl(output_dir)
+        if jsonl_path is None:
+            logger.warning("No JSONL output found in %s", output_dir)
+            continue
+        condition = _condition_from_path(jsonl_path)
+        system_name = f"{prefix}_{condition}"
+        systems[system_name] = load_system_records(
+            jsonl_path,
+            system_name,
+            max_examples,
+            id_filter=id_filter,
+        )
+    return systems
 
-    for json_file in stage1_dir.glob("*.json"):
-        with open(json_file) as f:
-            data = json.load(f)
-            explanations[json_file.stem] = data
 
-    return explanations
+def valid_image_pairs(records: List[Dict[str, Any]], text_key: str) -> Tuple[List[str], List[str]]:
+    images: List[str] = []
+    texts: List[str] = []
+    for rec in records:
+        image_path = rec.get("image_path") or ""
+        if image_path and Path(image_path).exists():
+            images.append(image_path)
+            texts.append(rec.get(text_key, ""))
+    return images, texts
 
 
 def evaluate_system(
     system_name: str,
-    originals: List[str],
-    rewrites: List[str],
-    images: List,
-    original_explanations: List[Dict],
-    images_dir: Path,
-    explainer=None,
-    hf_cache: str = None
-) -> Dict:
-    """
-    Evaluate a single system across all metrics.
+    records: List[Dict[str, Any]],
+    hf_cache: Optional[str],
+    compute_clip: bool,
+    compute_visualbert: bool,
+) -> Dict[str, Any]:
+    logger.info("=" * 80)
+    logger.info("Evaluating %s (%d examples)", system_name, len(records))
+    logger.info("=" * 80)
 
-    Args:
-        system_name: Name of the system
-        originals: Original texts
-        rewrites: Rewritten texts
-        images: Image paths or PIL Images
-        original_explanations: Original Stage 1 explanations
-        images_dir: Directory of images
-        explainer: MemeExplainer instance (for Rewrite Precision)
-        hf_cache: Hugging Face cache directory
+    originals = [r["original_text"] for r in records]
+    rewrites = [r["rewrite"] for r in records]
 
-    Returns:
-        Dict with all metric results
-    """
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Evaluating {system_name}")
-    logger.info(f"{'='*60}")
-
-    if len(rewrites) == 0:
-        logger.warning(f"No rewrites for {system_name}, skipping")
-        return None
-
-    results = {
+    result: Dict[str, Any] = {
         "system": system_name,
-        "num_examples": len(rewrites)
+        "num_examples": len(records),
     }
 
-    # Set cache directory
-    if hf_cache:
-        import os
-        os.environ["HF_HOME"] = hf_cache
+    if not records:
+        result["error"] = "no_records"
+        return result
 
-    # STA: Semantic Toxicity Attenuation
-    logger.info("Computing STA...")
-    sta_result = compute_sta(rewrites)
-    results["sta"] = sta_result
+    logger.info("Computing text STA for originals and rewrites...")
+    original_sta = compute_sta(originals)
+    rewrite_sta = compute_sta(rewrites)
+    result["text_sta_original"] = original_sta
+    result["text_sta_rewrite"] = rewrite_sta
+    result["text_sta_delta"] = float(rewrite_sta["mean"] - original_sta["mean"])
 
-    # SIM: Semantic Similarity (BERTScore)
-    logger.info("Computing SIM...")
-    sim_result = compute_sim(originals, rewrites)
-    results["sim"] = sim_result
+    logger.info("Computing BERTScore SIM...")
+    result["sim"] = compute_sim(originals, rewrites)
 
-    # CLIPScore
-    if len(images) > 0:
+    images_for_rewrite, rewrite_texts_for_images = valid_image_pairs(records, "rewrite")
+    images_for_original, original_texts_for_images = valid_image_pairs(records, "original_text")
+    result["num_valid_images"] = len(images_for_rewrite)
+
+    if compute_clip and images_for_rewrite:
         logger.info("Computing CLIPScore...")
-        try:
-            clip_result = compute_clipscore(images, rewrites)
-            results["clip"] = clip_result
-        except Exception as e:
-            logger.error(f"CLIPScore computation failed: {e}")
-            results["clip"] = None
+        result["clip"] = compute_clipscore(images_for_rewrite, rewrite_texts_for_images)
     else:
-        logger.warning("No images provided, skipping CLIPScore")
-        results["clip"] = None
+        result["clip"] = None
 
-    # Rewrite Precision
-    if explainer is not None and len(original_explanations) > 0:
-        logger.info("Computing Rewrite Precision...")
-        try:
-            rp_result = compute_rewrite_precision(images, rewrites, original_explanations, explainer)
-            results["rewrite_precision"] = rp_result
-        except Exception as e:
-            logger.error(f"Rewrite Precision computation failed: {e}")
-            results["rewrite_precision"] = None
+    if compute_visualbert and images_for_rewrite:
+        logger.info("Computing VisualBERT multimodal toxicity for originals...")
+        original_mm = compute_multimodal_hateness(
+            images_for_original,
+            original_texts_for_images,
+            hf_cache=hf_cache,
+        )
+        logger.info("Computing VisualBERT multimodal toxicity for rewrites...")
+        rewrite_mm = compute_multimodal_hateness(
+            images_for_rewrite,
+            rewrite_texts_for_images,
+            hf_cache=hf_cache,
+        )
+        result["visualbert_original"] = original_mm
+        result["visualbert_rewrite"] = rewrite_mm
+
+        original_hate = original_mm.get("hate_prob_mean")
+        rewrite_hate = rewrite_mm.get("hate_prob_mean")
+        original_non_hate = original_mm.get("non_hate_prob_mean")
+        rewrite_non_hate = rewrite_mm.get("non_hate_prob_mean")
+        result["visualbert_hate_drop"] = (
+            float(original_hate - rewrite_hate)
+            if original_hate is not None and rewrite_hate is not None
+            else None
+        )
+        result["visualbert_sta_delta"] = (
+            float(rewrite_non_hate - original_non_hate)
+            if original_non_hate is not None and rewrite_non_hate is not None
+            else None
+        )
     else:
-        logger.warning("Explainer or original explanations not available, skipping Rewrite Precision")
-        results["rewrite_precision"] = None
+        result["visualbert_original"] = None
+        result["visualbert_rewrite"] = None
+        result["visualbert_hate_drop"] = None
+        result["visualbert_sta_delta"] = None
 
-    # Aggregate J
-    if results["clip"] is not None and results["rewrite_precision"] is not None:
-        J = compute_aggregate_J(sta_result, sim_result, results["clip"], results["rewrite_precision"])
-        results["aggregate_j"] = J
-    else:
-        logger.warning("Cannot compute aggregate J without CLIPScore and Rewrite Precision")
-        results["aggregate_j"] = None
+    stage1_drops = [r["toxicity_drop"] for r in records if r.get("toxicity_drop") is not None]
+    if stage1_drops:
+        result["stage1_visualbert_toxicity_drop_mean"] = float(np.mean(stage1_drops))
 
-    # Estimate params (hardcoded for known models)
-    params_millions = estimate_params(system_name)
-    results["params_millions"] = params_millions
-
-    return results
+    return result
 
 
-def estimate_params(system_name: str) -> float:
-    """Estimate number of parameters (in millions) for a system."""
-    params_map = {
-        "llava_end_to_end": 34.0,  # LLaVA 1.5 (34B)
-        "llava_structured": 34.0,
-        "detoxllm_text_only": 7.0,  # DetoxLLM 7B
-        "bart_none": 0.4,  # BART base
-        "bart_target_only": 0.4,
-        "bart_visual_only": 0.4,
-        "bart_full": 0.4,
-        "clip_proxy_bart": 0.4 + 0.428,  # BART + CLIP ViT
+def compact_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    text_sta = result.get("text_sta_rewrite") or {}
+    sim = result.get("sim") or {}
+    clip = result.get("clip") or {}
+    vb_rewrite = result.get("visualbert_rewrite") or {}
+    return {
+        "system": result.get("system"),
+        "n": result.get("num_examples"),
+        "valid_images": result.get("num_valid_images"),
+        "text_sta": text_sta.get("mean"),
+        "text_sta_delta": result.get("text_sta_delta"),
+        "sim": sim.get("mean"),
+        "clip": clip.get("mean") if clip else None,
+        "visualbert_hate_prob": vb_rewrite.get("hate_prob_mean") if vb_rewrite else None,
+        "visualbert_sta": vb_rewrite.get("non_hate_pred_rate") if vb_rewrite else None,
+        "visualbert_hate_drop": result.get("visualbert_hate_drop"),
     }
-    return params_map.get(system_name, 0.0)
 
 
-def format_results_table(all_results: List[Dict]) -> str:
-    """Format results as a nice table."""
-    lines = []
-    lines.append("=" * 120)
-    lines.append(f"{'System':<25} {'STA':<10} {'SIM':<10} {'CLIP':<10} {'RP':<10} {'J':<10} {'Params(M)':<12} {'CO2(g)':<10}")
-    lines.append("-" * 120)
+def write_summary_table(summaries: List[Dict[str, Any]], output_path: Path) -> None:
+    headers = [
+        "system",
+        "n",
+        "valid_images",
+        "text_sta",
+        "text_sta_delta",
+        "sim",
+        "clip",
+        "visualbert_hate_prob",
+        "visualbert_sta",
+        "visualbert_hate_drop",
+    ]
 
-    for result in all_results:
-        if result is None:
-            continue
+    def fmt(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.4f}"
+        return str(value)
 
-        system = result["system"]
-        sta = f"{result['sta']['mean']:.4f}" if result["sta"] else "N/A"
-        sim = f"{result['sim']['mean']:.4f}" if result["sim"] else "N/A"
-        clip = f"{result['clip']['mean']:.4f}" if result["clip"] else "N/A"
-        rp = f"{result['rewrite_precision']['mean']:.4f}" if result["rewrite_precision"] else "N/A"
-        j = f"{result['aggregate_j']:.6f}" if result["aggregate_j"] else "N/A"
-        params = f"{result['params_millions']:.1f}" if result["params_millions"] else "0.0"
-        co2 = result.get("co2", "N/A")
-        if isinstance(co2, (int, float)):
-            co2 = f"{co2:.4f}"
-
-        lines.append(f"{system:<25} {sta:<10} {sim:<10} {clip:<10} {rp:<10} {j:<10} {params:<12} {co2:<10}")
-
-    lines.append("=" * 120)
-    return "\n".join(lines)
+    lines = ["\t".join(headers)]
+    for row in summaries:
+        lines.append("\t".join(fmt(row.get(h)) for h in headers))
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate hateful meme detoxification systems")
-    parser.add_argument("--rewrites_dir", type=Path, required=True, help="Directory with rewrite JSONL files")
-    parser.add_argument("--images_dir", type=Path, required=True, help="Directory with meme images")
-    parser.add_argument("--stage1_outputs_dir", type=Path, default=None, help="Directory with Stage 1 outputs")
-    parser.add_argument("--output_path", type=Path, required=True, help="Output JSON file path")
-    parser.add_argument("--hf_cache", type=str, default=None, help="Hugging Face cache directory")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Evaluate LLaVA, base BART, and finetuned BART rewrites")
+    parser.add_argument(
+        "--validation_jsonl",
+        type=Path,
+        default=None,
+        help="Stage 2 held-out validation JSONL. Uses target_text as the LLaVA teacher/reference.",
+    )
+    parser.add_argument(
+        "--llava_rewrites_path",
+        type=Path,
+        default=None,
+        help="Fallback Stage 1 pseudo-rewrite JSONL if --validation_jsonl is not provided.",
+    )
+    parser.add_argument("--bart_base_output_dirs", type=Path, nargs="*", default=[])
+    parser.add_argument("--bart_finetuned_output_dirs", type=Path, nargs="*", default=[])
+    parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--hf_cache", type=str, default=None)
+    parser.add_argument("--max_examples", type=int, default=None)
+    parser.add_argument("--skip_clipscore", action="store_true")
+    parser.add_argument("--skip_visualbert", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    if args.debug:
-        setup_debug_mode()
+    if args.hf_cache:
+        os.environ["HF_HOME"] = args.hf_cache
 
-    setup_logging(debug=args.debug)
-    logger.info("Starting evaluation")
-
-    # Set random seeds
+    setup_logging(args.output_dir, debug=args.debug)
     np.random.seed(42)
     torch.manual_seed(42)
 
-    # List of systems to evaluate
-    systems = [
-        "llava_end_to_end",
-        "llava_structured",
-        "detoxllm_text_only",
-        "bart_none",
-        "bart_target_only",
-        "bart_visual_only",
-        "bart_full",
-        "clip_proxy_bart",
-    ]
+    max_examples = args.max_examples
+    if args.debug and max_examples is None:
+        max_examples = 32
 
-    all_results = []
-
-    # Try to load explainer if stage1 outputs available
-    explainer = None
-    if args.stage1_outputs_dir:
-        try:
-            from models.explainer import MemeExplainer
-            explainer = MemeExplainer(hf_cache=args.hf_cache)
-        except Exception as e:
-            logger.warning(f"Could not load explainer: {e}")
-
-    # Evaluate each system
-    for system in systems:
-        originals, rewrites = load_rewrites(args.rewrites_dir, system)
-
-        if not rewrites:
-            logger.warning(f"Skipping {system}: no rewrites found")
-            continue
-
-        # Load images (match by index)
-        images = []
-        if args.images_dir.exists():
-            # Assuming images are named by index: 0.jpg, 1.jpg, etc.
-            for i in range(len(rewrites)):
-                img_path = args.images_dir / f"{i}.jpg"
-                if not img_path.exists():
-                    img_path = args.images_dir / f"{i}.png"
-                if img_path.exists():
-                    images.append(img_path)
-
-        # Load original explanations
-        original_explanations = []
-        if args.stage1_outputs_dir:
-            stage1_data = load_stage1_outputs(args.stage1_outputs_dir)
-            original_explanations = [stage1_data.get(i, {}) for i in range(len(rewrites))]
-
-        result = evaluate_system(
-            system,
-            originals,
-            rewrites,
-            images,
-            original_explanations,
-            args.images_dir,
-            explainer=explainer,
-            hf_cache=args.hf_cache
+    systems: Dict[str, List[Dict[str, Any]]] = {}
+    validation_ids = None
+    if args.validation_jsonl is not None:
+        systems["llava_teacher"] = load_validation_teacher_records(args.validation_jsonl, max_examples)
+        validation_ids = {
+            str(r["id"]) for r in systems["llava_teacher"]
+            if r.get("id") is not None
+        }
+    elif args.llava_rewrites_path is not None:
+        systems["llava_teacher"] = load_system_records(
+            args.llava_rewrites_path,
+            "llava_teacher",
+            max_examples,
         )
+    else:
+        logger.error("Provide either --validation_jsonl or --llava_rewrites_path.")
+        return 1
 
-        if result:
-            all_results.append(result)
+    systems.update(discover_stage2_systems(
+        args.bart_base_output_dirs,
+        "bart_base",
+        max_examples,
+        id_filter=validation_ids,
+    ))
+    systems.update(discover_stage2_systems(
+        args.bart_finetuned_output_dirs,
+        "bart_finetuned",
+        max_examples,
+        id_filter=validation_ids,
+    ))
 
-    # Print table
-    table = format_results_table(all_results)
-    print("\n" + table)
+    if not systems:
+        logger.error("No systems were loaded.")
+        return 1
 
-    # Save JSON
-    args.output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output_path, "w") as f:
-        json.dump(all_results, f, indent=2)
+    results: List[Dict[str, Any]] = []
+    for system_name, records in systems.items():
+        result = evaluate_system(
+            system_name=system_name,
+            records=records,
+            hf_cache=args.hf_cache,
+            compute_clip=not args.skip_clipscore,
+            compute_visualbert=not args.skip_visualbert,
+        )
+        results.append(result)
 
-    logger.info(f"Results saved to {args.output_path}")
+    summaries = [compact_summary(r) for r in results]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    full_path = args.output_dir / "evaluation_results.json"
+    summary_path = args.output_dir / "evaluation_summary.json"
+    table_path = args.output_dir / "evaluation_summary.tsv"
+
+    full_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    summary_path.write_text(json.dumps(summaries, indent=2), encoding="utf-8")
+    write_summary_table(summaries, table_path)
+
+    logger.info("Evaluation complete.")
+    logger.info("Full results: %s", full_path)
+    logger.info("Summary JSON: %s", summary_path)
+    logger.info("Summary TSV: %s", table_path)
+
+    print("\nEvaluation summary")
+    print(table_path.read_text(encoding="utf-8"))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -37,13 +37,13 @@ Stage 1B ─── LLaVA-Next pseudo-rewrites (sharded)  [GPU]
                ▼
    Build Stage 2 Dataset
                │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
-               │  Input format: [T: {target}] [A: {attack}] [M: {meaning}] </s> {text}
+               │  Input format: [T: {target}] [V: {visual_evidence}] [M: {meaning}] | {text}
                ▼
 Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel)  [GPU]
                │  Conditions: full | target_only | visual_only | none
                │  LoRA: r=32, alpha=64, dropout=0.05 on q/k/v/out_proj + fc1/fc2
                │  ~17M trainable / 400M total parameters (~4.3%)
-               │  5 epochs, lr=3e-4, starts directly from facebook/bart-large
+               │  5 epochs, lr=1e-4, starts directly from facebook/bart-large
                │  Evaluation metrics per checkpoint:
                │    ROUGE-1/2/L, collapse rate, text STA (RoBERTa),
                │    multimodal STA (VisualBERT image+text, eval-only)
@@ -357,7 +357,7 @@ and will skip examples that already exist in shard rewrite outputs.
 **Merge pseudo-rewrite shards**  
 Run once after all Stage 1B shards finish:
 ```bash
-python python inference/merge_stage1_rewrites_shards.py \
+python inference/merge_stage1_rewrites_shards.py \
   --dataset train \
   --input_dir /mnt/course-ee-559/rcp-caas-ee-559-g31/scratch-g31/hmr_stage1_output \
   --num_shards 8
@@ -442,15 +442,223 @@ bash scripts/runai_evaluate.sh <UID>
 
 ---
 
-## Evaluation Results
+## Current Experiment Report
 
-| Condition | BLEU | ROUGE-L | BERTScore | Toxicity ↓ |
-|-----------|------|---------|-----------|------------|
-| full      |      |         |           |            |
-| target_only |   |         |           |            |
-| visual_only |   |         |           |            |
-| none      |      |         |           |            |
-| LLaVA baseline |  |      |           |            |
+This section summarizes the current state of the repository and the results obtained from the latest full pipeline run. The goal of the project is not to outperform LLaVA-Next directly. LLaVA-Next is used as a large teacher model to produce explanations and pseudo-rewrites; the real objective is to fine-tune a much smaller BART-large student so that it can detoxify meme text while preserving the intended meaning as much as possible.
+
+### What Was Done
+
+The implemented pipeline follows an explain-then-rewrite strategy:
+
+1. **Filter meme-like images.** Stage 0 uses EasyOCR to extract overlaid meme text and CLIP to discard images that are not visually meme-like. This is necessary because some raw datasets, especially MMHS150K, contain many plain photos, screenshots, and social-media UI captures.
+
+2. **Build unified splits.** The filtered HarMeme, MAMI, and MMHS150K examples are merged into stratified train/validation/test splits. The split is stratified by dataset and hateful label so each split contains examples from all sources.
+
+3. **Generate LLaVA explanations.** Stage 1A runs LLaVA-Next over the unified training split to produce structured hate explanations. Each explanation contains:
+   - `target_group`: the protected or attacked group.
+   - `visual_evidence`: image evidence relevant to the hateful meaning.
+   - `implicit_meaning`: the implied hateful or harmful interpretation.
+
+4. **Generate LLaVA pseudo-rewrites.** Stage 1B asks LLaVA-Next to rewrite the meme text into a less toxic version. These pseudo-rewrites become the supervision target for BART.
+
+5. **Filter pseudo-rewrites before BART training.** The Stage 2 dataset builder keeps only pseudo-rewrites that pass the Stage 1 quality filters, have no parse error, have positive toxicity reduction, and are not almost identical to the source text. The current dataset statistics are:
+
+   | Quantity | Count |
+   |---|---:|
+   | Loaded LLaVA rewrite rows | 7,918 |
+   | Dropped because Stage 1 filters failed | 3,701 |
+   | Dropped because of parse errors | 560 |
+   | Kept after parse/toxicity filtering | 3,657 |
+   | Kept after rewrite text quality filtering | 3,578 |
+   | Train examples | 3,220 |
+   | Validation examples | 358 |
+
+   The final training set is therefore intentionally smaller but cleaner. This is a good fit for LoRA fine-tuning because only a small fraction of BART's parameters are updated.
+
+6. **Fine-tune BART-large with LoRA.** Four BART-large students are trained, one for each conditioning setting:
+
+   | Condition | Encoder input format |
+   |---|---|
+   | `full` | `[T: target_group] [V: visual_evidence] [M: implicit_meaning] \| original_text` |
+   | `target_only` | `[T: target_group] [V: null] [M: null] \| original_text` |
+   | `visual_only` | `[T: null] [V: visual_evidence] [M: null] \| original_text` |
+   | `none` | `[T: null] [V: null] [M: null] \| original_text` |
+
+   The current fine-tuning setup is:
+   - Base model: `facebook/bart-large`.
+   - Training data: meme pseudo-rewrites only; no ParaDetox warm-up in the current run.
+   - Epochs: 5.
+   - Batch size: 8.
+   - Learning rate: `1e-4`.
+   - Warm-up: 50 steps.
+   - Weight decay: `0.01`.
+   - LoRA rank: `r=32`.
+   - LoRA alpha: `64`.
+   - LoRA dropout: `0.05`.
+   - LoRA target modules: `q_proj`, `k_proj`, `v_proj`, `out_proj`, `fc1`, `fc2`.
+   - Trainable parameters: about 17M out of about 400M total, roughly 4%.
+
+7. **Train a proxy model.** The repo also contains a proxy stage. The proxy is a small MLP trained from CLIP image/text features to BART encoder hidden states. Its purpose is to support a future VLM-free deployment path. In the current project, the main reported comparison is still the BART fine-tuning/evaluation pipeline.
+
+8. **Evaluate all systems on the held-out validation set.** The evaluation script compares:
+   - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/val.jsonl`.
+   - `bart_base_*`: non-finetuned `facebook/bart-large` under the four input conditions.
+   - `bart_finetuned_*`: the four LoRA-finetuned BART models.
+
+   All systems are evaluated on the same 358 validation examples. The evaluation uses the exact BART outputs as generated. The code does not sanitize or post-process BART rewrites before scoring. The only truncation is internal to CLIPScore because CLIP has a hard 77-token text limit.
+
+### Evaluation Outputs
+
+The main evaluation artifacts are written to:
+
+```
+/scratch/hmr_eval_results/
+├── evaluate.log
+├── evaluation_results.json
+├── evaluation_summary.json
+└── evaluation_summary.tsv
+```
+
+The compact TSV is the easiest file to inspect. Its columns mean:
+
+| Column | Meaning |
+|---|---|
+| `system` | Model/system being evaluated. |
+| `n` | Number of evaluated validation examples. |
+| `valid_images` | Number of examples with valid image paths for image-based metrics. |
+| `text_sta` | Mean non-toxic probability from `s-nlp/roberta_toxicity_classifier`; higher is better. |
+| `text_sta_delta` | Rewrite text STA minus original text STA; positive means the rewrite is less toxic than the original. |
+| `sim` | BERTScore F1 between original text and rewrite; higher means better meaning preservation. |
+| `clip` | CLIPScore between image and rewrite; higher means better image-text alignment. |
+| `visualbert_hate_prob` | Mean multimodal hate probability from VisualBERT. |
+| `visualbert_sta` | Fraction of examples VisualBERT predicts as non-hateful. |
+| `visualbert_hate_drop` | Original VisualBERT hate probability minus rewrite hate probability; positive means lower predicted hate after rewriting. |
+
+### Current Validation Results
+
+Latest `evaluation_summary.tsv`:
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
+| `bart_base_full` | 358 | 0.9088 | 0.2376 | -0.2235 | 0.6073 | 0.6582 | 0.0000 | -0.0122 |
+| `bart_base_target_only` | 358 | 0.9410 | 0.2698 | -0.3046 | 0.5948 | 0.6601 | 0.0000 | -0.0142 |
+| `bart_base_visual_only` | 358 | 0.9242 | 0.2530 | -0.2320 | 0.5995 | 0.6624 | 0.0000 | -0.0165 |
+| `bart_base_none` | 358 | 0.9355 | 0.2643 | -0.2954 | 0.5945 | 0.6640 | 0.0000 | -0.0181 |
+| `bart_finetuned_full` | 358 | 0.9261 | 0.2548 | 0.2991 | 0.6236 | 0.6539 | 0.0000 | -0.0080 |
+| `bart_finetuned_target_only` | 358 | 0.9131 | 0.2419 | 0.2815 | 0.6219 | 0.6523 | 0.0000 | -0.0063 |
+| `bart_finetuned_visual_only` | 358 | 0.9169 | 0.2456 | 0.3252 | 0.6261 | 0.6522 | 0.0000 | -0.0063 |
+| `bart_finetuned_none` | 358 | 0.9178 | 0.2465 | 0.3261 | 0.6256 | 0.6517 | 0.0000 | -0.0058 |
+
+### Main Findings
+
+The most important result is that LoRA fine-tuning makes BART much more faithful to the rewriting task.
+
+Compared with non-finetuned BART, the finetuned BART models move from negative SIM scores to clearly positive SIM scores:
+
+| Condition | Base BART SIM | Finetuned BART SIM | Change |
+|---|---:|---:|---:|
+| `full` | -0.2235 | 0.2991 | +0.5226 |
+| `target_only` | -0.3046 | 0.2815 | +0.5861 |
+| `visual_only` | -0.2320 | 0.3252 | +0.5572 |
+| `none` | -0.2954 | 0.3261 | +0.6215 |
+
+This means that non-finetuned BART can often produce superficially safe text, but those outputs are not semantically close to the desired rewrite. Fine-tuning teaches BART the actual meme rewriting distribution: the output remains much closer to the original/teacher meaning while still reducing textual toxicity.
+
+CLIPScore also improves in every condition:
+
+| Condition | Base BART CLIP | Finetuned BART CLIP | Change |
+|---|---:|---:|---:|
+| `full` | 0.6073 | 0.6236 | +0.0163 |
+| `target_only` | 0.5948 | 0.6219 | +0.0271 |
+| `visual_only` | 0.5995 | 0.6261 | +0.0266 |
+| `none` | 0.5945 | 0.6256 | +0.0311 |
+
+This suggests that the finetuned outputs are not only textually closer to the target rewrite, but also more compatible with the meme image.
+
+Textual detoxification remains high after fine-tuning:
+
+| Condition | Base BART Text STA | Finetuned BART Text STA |
+|---|---:|---:|
+| `full` | 0.9088 | 0.9261 |
+| `target_only` | 0.9410 | 0.9131 |
+| `visual_only` | 0.9242 | 0.9169 |
+| `none` | 0.9355 | 0.9178 |
+
+The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions have slightly lower text STA than their base-BART counterparts, but they are far more faithful. For the project goal, this trade-off is acceptable: a model that keeps `text_sta` around 0.91-0.93 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
+
+The LLaVA teacher remains the best system overall in text STA and SIM. This is expected because LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant comparison for the student model is therefore not "does BART beat LLaVA?", but "does fine-tuning make BART a useful small detoxification model?". The answer from the current results is yes.
+
+### Important Caveat About VisualBERT
+
+The VisualBERT multimodal metric should be interpreted cautiously. `visualbert_sta` is `0.0000` for every system, including the LLaVA teacher. This likely means the VisualBERT classifier is too strict, miscalibrated for rewritten text, or not well matched to this evaluation setup. The hate probability changes are directionally interesting, but the absolute non-hateful prediction rate is not reliable enough to be a main conclusion.
+
+The safer conclusion is:
+
+- Text toxicity metrics show that rewrites are less toxic.
+- SIM and CLIPScore show that fine-tuning improves meaning preservation and image-text alignment.
+- VisualBERT does not currently provide a useful absolute pass/fail multimodal detox score for this validation set.
+
+### Training Behavior
+
+Training curves can be recovered or plotted with:
+
+```bash
+bash scripts/runai_plot_curves.sh <UID>
+```
+
+The current plots are stored in:
+
+```
+/scratch/hmr_training_plots/
+├── phase2_loss_curves.png
+├── phase2_rouge_curves.png
+├── phase2_sta_curves.png
+├── phase2_text_toxicity_drop_curves.png
+├── phase2_multimodal_hate_prob_curves.png
+├── phase2_multimodal_sta_curves.png
+├── phase2_copy_rate_high_curves.png
+├── phase2_detox_quality_curves.png
+└── all_phases_summary.png
+```
+
+The training logs show the expected behavior:
+
+- Training loss decreases strongly for every condition.
+- Validation text STA increases during training.
+- Text toxicity drop improves during training.
+- ROUGE stays relatively stable instead of collapsing.
+- Copy rate is monitored to detect outputs that are too close to the original.
+- VisualBERT STA stays flat at 0, reinforcing the caveat above.
+
+For example, in the `full` condition:
+
+| Metric | Early eval | Final eval |
+|---|---:|---:|
+| Eval loss | 1.5503 | 1.4423 |
+| Text STA | 0.8631 | 0.9274 |
+| Text toxicity drop | 0.1914 | 0.2547 |
+| Detox quality | 0.2091 | 0.2788 |
+| High-copy rate | 0.1061 | 0.0754 |
+
+This confirms that the model is not merely memorizing copies of the input. It learns to produce outputs that are more non-toxic while keeping a controlled level of similarity to the source.
+
+### Final Interpretation
+
+The current finetuning is useful for the intended scope. It distills part of LLaVA's rewriting behavior into a much smaller BART-large model. The student does not reach the teacher's quality, but it substantially improves over non-finetuned BART in the metrics that matter most for a small detoxification model:
+
+- It keeps textual toxicity low.
+- It greatly improves semantic faithfulness.
+- It improves image-text alignment.
+- It avoids obvious collapse.
+- It can be evaluated under multiple conditioning ablations.
+
+The most interesting next steps are:
+
+1. Improve or replace the multimodal toxicity metric, because the current VisualBERT score is not sufficiently informative.
+2. Inspect qualitative outputs per condition to understand why `none`, `visual_only`, and `full` are close in final performance.
+3. Consider stronger conditioning usage, for example by training a single multi-condition model with explicit condition dropout rather than four fully separate models.
+4. Report the fine-tuned BART result primarily as a compact student model that trades a small loss in teacher-level quality for much lower inference cost.
 
 ---
 

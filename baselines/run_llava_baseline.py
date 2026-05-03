@@ -118,8 +118,8 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
             context_parts = []
             if explanation.get("description"):
                 context_parts.append(f"Description: {explanation['description']}")
-            if explanation.get("attack_type"):
-                context_parts.append(f"Attack Type: {explanation['attack_type']}")
+            if explanation.get("visual_evidence"):
+                context_parts.append(f"Visual Evidence: {explanation['visual_evidence']}")
             if explanation.get("offensive_keywords"):
                 context_parts.append(f"Offensive Keywords: {', '.join(explanation['offensive_keywords'])}")
             if explanation.get("rationale"):

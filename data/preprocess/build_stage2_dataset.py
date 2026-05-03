@@ -4,9 +4,10 @@ Build Stage 2 BART training dataset from merged Stage 1 pseudo-rewrites.
 Pipeline:
 1. Read `train_pseudo_rewrites_merged.jsonl`
 2. Filter out rows with parse errors
-3. Keep only rows with strictly positive toxicity drop
-4. Build Stage 2 records
-5. Split train/val and write JSONL outputs
+3. Keep only rows that passed Stage 1 quality filters
+4. Keep only rows with strictly positive toxicity drop
+5. Build Stage 2 records
+6. Split train/val and write JSONL outputs
 """
 
 import argparse
@@ -67,6 +68,10 @@ def _extract_parse_error(row: Dict) -> bool:
     return bool(row.get("parse_error", False))
 
 
+def _extract_passed_stage1_filters(row: Dict) -> bool:
+    return bool(row.get("passed_stage1_filters", False))
+
+
 def load_merged_rewrites(merged_path: str) -> List[Dict]:
     """Load and normalize rows from train_pseudo_rewrites_merged.jsonl."""
     path = Path(merged_path)
@@ -102,6 +107,12 @@ def load_merged_rewrites(merged_path: str) -> List[Dict]:
                 "explanation": raw.get("implicit_meaning") or expl.get("implicit_meaning") or "",
                 "pseudo_rewrite": raw.get("pseudo_rewrite", ""),
                 "toxicity_drop": raw.get("toxicity_drop"),
+                "passed_stage1_filters": _extract_passed_stage1_filters(raw),
+                "reject_reason": raw.get("reject_reason", ""),
+                "sta_score": raw.get("sta_score"),
+                "bertscore": raw.get("bertscore"),
+                "original_toxicity": raw.get("original_toxicity"),
+                "rewrite_toxicity": raw.get("rewrite_toxicity"),
                 "parse_error": _extract_parse_error(raw),
                 "dataset": raw.get("dataset", dataset_name),
             }
@@ -114,14 +125,17 @@ def load_merged_rewrites(merged_path: str) -> List[Dict]:
 def filter_rows_for_stage2(
     examples: List[Dict],
     min_toxicity_drop: float = 0.0,
+    require_passed_stage1_filters: bool = True,
 ) -> tuple[List[Dict], Dict[str, int]]:
     """
     Keep only examples with:
     1) parse_error == False
-    2) toxicity_drop > min_toxicity_drop
+    2) passed_stage1_filters == True (default)
+    3) toxicity_drop > min_toxicity_drop
     """
     kept: List[Dict] = []
     dropped = {
+        "failed_stage1_filters": 0,
         "parse_error": 0,
         "missing_toxicity_drop": 0,
         "non_positive_toxicity_drop": 0,
@@ -130,6 +144,10 @@ def filter_rows_for_stage2(
     for ex in examples:
         if bool(ex.get("parse_error", False)):
             dropped["parse_error"] += 1
+            continue
+
+        if require_passed_stage1_filters and not bool(ex.get("passed_stage1_filters", False)):
+            dropped["failed_stage1_filters"] += 1
             continue
 
         tox_drop = _safe_float(ex.get("toxicity_drop"))
@@ -165,6 +183,17 @@ LEADING_LABEL_RE = re.compile(
 
 def _normalize_for_compare(text: str) -> str:
     return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def normalized_char_similarity(a: str, b: str) -> float:
+    """Cheap copy-risk score for filtering near-identical pseudo rewrites."""
+    import difflib
+
+    left = _normalize_for_compare(a)
+    right = _normalize_for_compare(b)
+    if not left and not right:
+        return 1.0
+    return difflib.SequenceMatcher(None, left, right).ratio()
 
 
 def sanitize_rewrite_text(text: str) -> str:
@@ -314,6 +343,11 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
             "target_group": target_group,
             "visual_evidence": visual_evidence,
             "implicit_meaning": implicit_meaning,
+            "stage1_passed_filters": bool(example.get("passed_stage1_filters", False)),
+            "stage1_sta_score": example.get("sta_score"),
+            "stage1_bertscore": example.get("bertscore"),
+            "stage1_toxicity_drop": example.get("toxicity_drop"),
+            "source_similarity": round(normalized_char_similarity(original_text, pseudo_rewrite), 4),
             "condition": condition,
             "dataset": dataset
         }
@@ -398,6 +432,23 @@ def main():
         help="Minimum required toxicity drop; rows must satisfy toxicity_drop > this value"
     )
     parser.add_argument(
+        "--allow_failed_stage1_filters",
+        action="store_true",
+        help=(
+            "Include rows whose best rewrite did not pass Stage 1 filters. "
+            "Default is false because failed rows add weak detox supervision."
+        )
+    )
+    parser.add_argument(
+        "--max_source_similarity",
+        type=float,
+        default=1.0,
+        help=(
+            "Optional normalized source/rewrite similarity ceiling after sanitization. "
+            "Set below 1.0 to drop near-copy pseudo rewrites, e.g. 0.92."
+        )
+    )
+    parser.add_argument(
         "--train_ratio",
         type=float,
         default=0.9,
@@ -433,7 +484,9 @@ def main():
     rewrites_path = args.rewrites_path.strip() or default_merged
     print(f"  Rewrites:    {rewrites_path}")
     print(f"  Output dir:  {args.output_dir}")
+    print(f"  Require Stage 1 pass: {not args.allow_failed_stage1_filters}")
     print(f"  Min tox drop > {args.min_toxicity_drop}")
+    print(f"  Max source similarity: {args.max_source_similarity}")
     print(f"  Train ratio: {args.train_ratio}")
     print(f"  Seed:        {args.seed}")
     print(f"  Debug:       {args.debug}")
@@ -451,7 +504,12 @@ def main():
         logger.warning("DEBUG MODE ENABLED: Using small debug dataset, skipping parse/toxicity filtering")
         examples = make_debug_dataset()
         total_loaded = len(examples)
-        dropped_counts = {"parse_error": 0, "missing_toxicity_drop": 0, "non_positive_toxicity_drop": 0}
+        dropped_counts = {
+            "failed_stage1_filters": 0,
+            "parse_error": 0,
+            "missing_toxicity_drop": 0,
+            "non_positive_toxicity_drop": 0,
+        }
     else:
         examples = load_merged_rewrites(rewrites_path)
         if not examples:
@@ -462,6 +520,7 @@ def main():
         examples, dropped_counts = filter_rows_for_stage2(
             examples,
             min_toxicity_drop=args.min_toxicity_drop,
+            require_passed_stage1_filters=not args.allow_failed_stage1_filters,
         )
         if not examples:
             logger.error("All examples filtered out by parse_error/toxicity_drop conditions")
@@ -472,6 +531,22 @@ def main():
     if not training_data:
         logger.error("Failed to build training data")
         return 1
+
+    if args.max_source_similarity < 1.0:
+        before = len(training_data)
+        training_data = [
+            ex for ex in training_data
+            if _safe_float(ex.get("source_similarity")) is not None
+            and float(ex["source_similarity"]) <= args.max_source_similarity
+        ]
+        logger.info(
+            "Dropped %d records with source_similarity > %.3f",
+            before - len(training_data),
+            args.max_source_similarity,
+        )
+        if not training_data:
+            logger.error("All examples filtered out by --max_source_similarity")
+            return 1
 
     # Split into train/val
     train_data, val_data = split_train_val(
@@ -502,13 +577,16 @@ def main():
             "stage1_dir": args.stage1_dir,
             "rewrites_path": rewrites_path,
             "require_parse_error_false": True,
+            "require_passed_stage1_filters": not args.allow_failed_stage1_filters,
             "min_toxicity_drop_exclusive": args.min_toxicity_drop,
+            "max_source_similarity_inclusive": args.max_source_similarity,
             "train_val_ratio": args.train_ratio,
             "seed": args.seed,
             "debug": args.debug,
         },
         "counts": {
             "total_loaded_from_merged_rewrites": total_loaded,
+            "dropped_failed_stage1_filters": dropped_counts["failed_stage1_filters"],
             "dropped_parse_error": dropped_counts["parse_error"],
             "dropped_missing_toxicity_drop": dropped_counts["missing_toxicity_drop"],
             "dropped_non_positive_toxicity_drop": dropped_counts["non_positive_toxicity_drop"],
@@ -532,6 +610,7 @@ def main():
     print("=" * 80)
     print(f"Total examples loaded from merged rewrites:  {total_loaded}")
     if not args.debug:
+        print(f"Dropped failed Stage 1 filter rows:          {dropped_counts['failed_stage1_filters']}")
         print(f"Dropped parse_error rows:                    {dropped_counts['parse_error']}")
         print(f"Dropped rows with missing toxicity_drop:     {dropped_counts['missing_toxicity_drop']}")
         print(f"Dropped rows with toxicity_drop <= {args.min_toxicity_drop}: {dropped_counts['non_positive_toxicity_drop']}")

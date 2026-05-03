@@ -55,11 +55,73 @@ def load_explanation_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
     return examples
 
 
+def load_stage2_eval_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
+    """Load Stage 2 train/val JSONL rows and convert them to inference examples."""
+    examples = []
+    if not os.path.exists(jsonl_path):
+        logger.error(f"Stage 2 eval JSONL not found: {jsonl_path}")
+        return examples
+
+    with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping invalid JSON in %s line %d: %s", jsonl_path, line_num, exc)
+                continue
+            explanation = row.get("explanation")
+            if not isinstance(explanation, dict):
+                explanation = {
+                    "target_group": row.get("target_group"),
+                    "visual_evidence": row.get("visual_evidence"),
+                    "implicit_meaning": row.get("implicit_meaning"),
+                }
+            examples.append({
+                "id": row.get("id"),
+                "image_path": row.get("image_path", ""),
+                "original_text": row.get("original_text") or row.get("text") or "",
+                "target_text": row.get("target_text", ""),
+                "explanation": explanation,
+                "dataset": row.get("dataset"),
+            })
+
+    logger.info(f"Loaded {len(examples)} Stage 2 eval examples from {jsonl_path}")
+    return examples
+
+
 def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
     """Append batch of examples to JSONL file."""
     with open(output_path, "a") as f:
         for item in data:
             f.write(json.dumps(item) + "\n")
+
+
+def discover_explanation_files(stage1_dir: Path) -> List[Path]:
+    """
+    Discover Stage 1 explanation JSONL files.
+
+    Preference order avoids duplicate loading:
+      1) merged files: *_explanations_merged.jsonl
+      2) direct files: *_explanations.jsonl
+      3) sharded files: *_explanations_shard*.jsonl
+    """
+    merged = sorted(stage1_dir.rglob("*_explanations_merged.jsonl"))
+    if merged:
+        return merged
+
+    direct = sorted(stage1_dir.rglob("*_explanations.jsonl"))
+    if direct:
+        return direct
+
+    sharded = sorted(stage1_dir.rglob("*_explanations_shard*.jsonl"))
+    if sharded:
+        return sharded
+
+    # Backward/forward-compat fallback if naming changes again.
+    return sorted(stage1_dir.rglob("*explanations*.jsonl"))
 
 
 def build_condition_prompt(
@@ -80,18 +142,17 @@ def build_condition_prompt(
     """
     explanation_str = explanation or {}
     tg = explanation_str.get("target_group") or "null"
-    ve = explanation_str.get("visual_evidence") or explanation_str.get("attack_type") or "null"
+    ve = explanation_str.get("visual_evidence") or "null"
     im = explanation_str.get("implicit_meaning") or "null"
 
     if condition == "full":
         prefix = f"[T: {tg}] [V: {ve}] [M: {im}]"
     elif condition == "target_only":
         prefix = f"[T: {tg}] [V: null] [M: null]"
-    elif condition in {"visual_only", "attack_only"}:
+    elif condition == "visual_only":
         prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # 'none'
         prefix = "[T: null] [V: null] [M: null]"
-
     return f"{prefix} | {original_text}"
 
 
@@ -100,8 +161,14 @@ def main():
     parser.add_argument(
         "--stage1_output_dir",
         type=str,
-        required=True,
+        default=None,
         help="Directory containing per-dataset Stage 1 JSONL outputs (e.g. /scratch/hmr_stage1_output)"
+    )
+    parser.add_argument(
+        "--input_jsonl",
+        type=str,
+        default=None,
+        help="Optional Stage 2 val/test JSONL. If set, inference runs only on this file.",
     )
     parser.add_argument(
         "--checkpoint_dir",
@@ -119,7 +186,20 @@ def main():
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for inference")
-    parser.add_argument("--num_beams", type=int, default=5, help="Number of beams for beam search")
+    parser.add_argument("--num_beams", type=int, default=4, help="Number of beams for beam search")
+    parser.add_argument("--max_length", type=int, default=64, help="Maximum generated sequence length")
+    parser.add_argument(
+        "--no_repeat_ngram_size",
+        type=int,
+        default=3,
+        help="Prevent repeated n-grams inside generated rewrites",
+    )
+    parser.add_argument(
+        "--encoder_no_repeat_ngram_size",
+        type=int,
+        default=3,
+        help="Prevent copying n-grams from the input prompt/original text",
+    )
     parser.add_argument("--debug", action="store_true", help="Debug mode: process max 16 examples")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
@@ -142,13 +222,27 @@ def main():
     logger.info(f"Starting Stage 2 with condition={args.condition}, debug={args.debug}")
     logger.info(f"Arguments: {vars(args)}")
 
-    # Load Stage 1 outputs — collect all per-dataset explanation JSONL files
-    stage1_dir = Path(args.stage1_output_dir)
-    all_jsonl = sorted(stage1_dir.rglob("*_explanations.jsonl"))
-    examples = []
-    for jsonl_file in all_jsonl:
-        examples.extend(load_explanation_jsonl(str(jsonl_file)))
-    logger.info(f"Loaded {len(examples)} total examples from {len(all_jsonl)} datasets")
+    # Load evaluation examples. Prefer an explicit Stage 2 val/test JSONL so
+    # model comparisons are made on a held-out split rather than all Stage 1 rows.
+    if args.input_jsonl:
+        examples = load_stage2_eval_jsonl(args.input_jsonl)
+    else:
+        if not args.stage1_output_dir:
+            logger.error("Either --input_jsonl or --stage1_output_dir is required")
+            sys.exit(1)
+        stage1_dir = Path(args.stage1_output_dir)
+        all_jsonl = discover_explanation_files(stage1_dir)
+        logger.info(f"Discovered {len(all_jsonl)} explanation JSONL files under {stage1_dir}")
+        if all_jsonl:
+            preview = ", ".join(str(p.name) for p in all_jsonl[:5])
+            if len(all_jsonl) > 5:
+                preview += ", ..."
+            logger.info(f"Example input files: {preview}")
+
+        examples = []
+        for jsonl_file in all_jsonl:
+            examples.extend(load_explanation_jsonl(str(jsonl_file)))
+        logger.info(f"Loaded {len(examples)} total examples from {len(all_jsonl)} datasets")
     if args.debug:
         examples = examples[:16]
     logger.info(f"Processing {len(examples)} examples")
@@ -187,6 +281,9 @@ def main():
 
     # Prepare output path
     output_path = os.path.join(args.output_dir, f"stage2_rewrites_{args.condition}.jsonl")
+    if os.path.exists(output_path):
+        logger.info(f"Removing existing rewrite output before regeneration: {output_path}")
+        os.remove(output_path)
 
     # Process examples
     batch_texts = []
@@ -218,6 +315,7 @@ def main():
                     "id": example_id,
                     "image_path": image_path,
                     "original_text": original_text,
+                    "target_text": example.get("target_text", ""),
                     "explanation": explanation,
                     "condition": args.condition
                 })
@@ -227,7 +325,13 @@ def main():
                     try:
                         # prompts are already fully formatted by build_condition_prompt;
                         # use generate_from_formatted to avoid double-prefixing
-                        rewrites = rewriter.generate_from_formatted(batch_prompts, max_length=128)
+                        rewrites = rewriter.generate_from_formatted(
+                            batch_prompts,
+                            max_length=args.max_length,
+                            num_beams=args.num_beams,
+                            no_repeat_ngram_size=args.no_repeat_ngram_size,
+                            encoder_no_repeat_ngram_size=args.encoder_no_repeat_ngram_size,
+                        )
 
                         for i, rewrite in enumerate(rewrites):
                             batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = rewrite

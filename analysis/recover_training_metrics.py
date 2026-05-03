@@ -34,21 +34,21 @@ KNOWN_DIRS = {
     "hmr_stage2_phase1_checkpoint":         ("phase1", None),
     "hmr_stage2_phase2_full_checkpoint":    ("phase2", "full"),
     "hmr_stage2_phase2_target_only_checkpoint": ("phase2", "target_only"),
-    "hmr_stage2_phase2_attack_only_checkpoint": ("phase2", "attack_only"),
+    "hmr_stage2_phase2_visual_only_checkpoint": ("phase2", "visual_only"),
     "hmr_stage2_phase2_none_checkpoint":    ("phase2", "none"),
 }
 
 CONDITION_COLORS = {
     "full":        "#2196F3",
     "target_only": "#FF9800",
-    "attack_only": "#4CAF50",
+    "visual_only": "#4CAF50",
     "none":        "#9C27B0",
     "phase1":      "#E53935",
 }
 CONDITION_LABELS = {
-    "full":        "Full [T+A+M]",
+    "full":        "Full [T+V+M]",
     "target_only": "Target only [T]",
-    "attack_only": "Attack only [A]",
+    "visual_only": "Visual only [V]",
     "none":        "No cond. [—]",
 }
 
@@ -60,25 +60,27 @@ def find_trainer_state(checkpoint_dir: Path) -> Optional[Path]:
     Look for trainer_state.json.
     Priority:
       1. Direct file: <checkpoint_dir>/trainer_state.json
-      2. Inside the latest checkpoint subdir: <checkpoint_dir>/checkpoint-NNNN/trainer_state.json
-         (pick the one with the highest step number — that has the full log)
+      2. Inside checkpoint subdirs: <checkpoint_dir>/checkpoint-NNNN/trainer_state.json
+         (pick the newest file by mtime, so mixed old/new reruns do not select
+         a stale high-numbered checkpoint from a previous run)
     """
     direct = checkpoint_dir / "trainer_state.json"
     if direct.exists():
         return direct
 
-    # Find all checkpoint-NNN subdirs
-    subdirs = sorted(
-        [d for d in checkpoint_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
-        key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else 0
-    )
-    # Walk from highest step downward and return the first one that has trainer_state.json
-    for sub in reversed(subdirs):
-        candidate = sub / "trainer_state.json"
-        if candidate.exists():
-            return candidate
+    candidates = list(checkpoint_dir.glob("checkpoint-*/trainer_state.json"))
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
 
     return None
+
+
+def latest_trainer_state_mtime(checkpoint_dir: Path) -> Optional[float]:
+    """Return the newest trainer_state.json mtime under a checkpoint directory."""
+    paths = list(checkpoint_dir.rglob("trainer_state.json"))
+    if not paths:
+        return None
+    return max(p.stat().st_mtime for p in paths)
 
 
 def load_trainer_state(path: Path) -> Dict:
@@ -128,9 +130,15 @@ def recover_checkpoint(checkpoint_dir: Path, phase: str, condition: Optional[str
     # If training_history.json already exists, just load it
     existing = checkpoint_dir / "training_history.json"
     if existing.exists():
-        print(f"    ✓ training_history.json already exists — loading it")
-        with open(existing) as f:
-            return json.load(f)
+        latest_state_mtime = latest_trainer_state_mtime(checkpoint_dir)
+        if latest_state_mtime is None or existing.stat().st_mtime >= latest_state_mtime:
+            print(f"    ✓ training_history.json already exists — loading it")
+            with open(existing) as f:
+                return json.load(f)
+        print(
+            "    ! training_history.json is older than a checkpoint trainer_state.json "
+            "— rebuilding from newest trainer_state.json"
+        )
 
     # Try to find trainer_state.json
     state_path = find_trainer_state(checkpoint_dir)
@@ -162,6 +170,11 @@ def recover_checkpoint(checkpoint_dir: Path, phase: str, condition: Optional[str
     return history
 
 
+def canonicalize_condition(condition: Optional[str]) -> Optional[str]:
+    """Normalize condition names."""
+    return condition
+
+
 # ── plotting (shared with plot_training_curves.py) ────────────────────────────
 
 def split_log(log_history):
@@ -178,6 +191,11 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             return values
         return list(np.convolve(values, np.ones(window) / window, mode="valid"))
 
+    def smooth_xy(steps, values, window):
+        if len(values) <= window:
+            return steps, values
+        return steps[window - 1:], smooth(values, window)
+
     # ── Phase 1 ──────────────────────────────────────────────────────────────
     if phase1_hist and phase1_hist.get("log_history"):
         train_logs, eval_logs = split_log(phase1_hist["log_history"])
@@ -191,8 +209,8 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             losses = [e["loss"] for e in train_logs]
             ax.plot(steps, losses, color=c, linewidth=1, alpha=0.4)
             w = max(5, len(losses) // 20)
-            sm_losses = smooth(losses, w)
-            ax.plot(steps[w - 1:], sm_losses, color=c, linewidth=2.5, label="smoothed")
+            sm_steps, sm_losses = smooth_xy(steps, losses, w)
+            ax.plot(sm_steps, sm_losses, color=c, linewidth=2.5, label="smoothed")
         ax.set_title("Training Loss"); ax.set_xlabel("Step"); ax.set_ylabel("Loss"); ax.grid(True, alpha=0.3)
 
         ax = axes[1]
@@ -235,26 +253,53 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         plt.close(fig)
         print(f"  Saved: {p}")
 
-    # ── Phase 2 per-metric comparison ─────────────────────────────────────────
-    for metric_key, metric_label, fname in [
-        ("eval_loss",   "Validation Loss",    "phase2_loss_curves.png"),
-        ("eval_rougeL", "Validation ROUGE-L", "phase2_rouge_curves.png"),
-        ("eval_sta",    "Validation STA (↑ = more non-toxic outputs)", "phase2_sta_curves.png"),
-    ]:
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.set_title(f"Stage 2 — Phase 2: {metric_label} by Condition", fontsize=12, fontweight="bold")
+    def plot_phase2_metric(ax, metric_key, metric_label, marker="o", ylim=None, title=None):
         any_data = False
         for h in phase2_hists:
-            cond = h.get("condition", "unknown")
+            cond = canonicalize_condition(h.get("condition", "unknown"))
             _, eval_logs = split_log(h["log_history"])
             entries = [e for e in eval_logs if metric_key in e]
             if entries:
-                ax.plot([e["step"] for e in entries], [e[metric_key] for e in entries],
-                        color=CONDITION_COLORS.get(cond, "#607D8B"), linewidth=2,
-                        marker="o", markersize=4, label=CONDITION_LABELS.get(cond, cond))
+                ax.plot(
+                    [e["step"] for e in entries],
+                    [e[metric_key] for e in entries],
+                    color=CONDITION_COLORS.get(cond, "#607D8B"),
+                    linewidth=2,
+                    marker=marker,
+                    markersize=4,
+                    label=CONDITION_LABELS.get(cond, cond),
+                )
                 any_data = True
+        ax.set_title(title or metric_label)
+        ax.set_xlabel("Step")
+        ax.set_ylabel(metric_label)
+        if ylim:
+            ax.set_ylim(*ylim)
+        ax.grid(True, alpha=0.3)
+        return any_data
+
+    # ── Phase 2 per-metric comparison ─────────────────────────────────────────
+    for metric_key, metric_label, fname, ylim in [
+        ("eval_loss",   "Validation Loss",    "phase2_loss_curves.png", None),
+        ("eval_rougeL", "Validation ROUGE-L", "phase2_rouge_curves.png", None),
+        ("eval_sta",    "Text STA (↑ = more non-toxic outputs)", "phase2_sta_curves.png", (0, 1.05)),
+        ("eval_multimodal_sta", "VisualBERT STA (↑ = more non-hateful memes)", "phase2_multimodal_sta_curves.png", (0, 1.05)),
+        ("eval_text_toxicity_drop", "Text Toxicity Drop vs Original (↑ better)", "phase2_text_toxicity_drop_curves.png", None),
+        ("eval_multimodal_toxicity_drop", "VisualBERT Hate-Prob. Drop vs Original (↑ better)", "phase2_multimodal_toxicity_drop_curves.png", None),
+        ("eval_pred_toxicity_mean", "Generated Text Toxicity Prob. (↓ better)", "phase2_text_toxicity_mean_curves.png", (0, 1.05)),
+        ("eval_multimodal_hate_prob_mean", "Generated VisualBERT Hate Prob. (↓ better)", "phase2_multimodal_hate_prob_curves.png", (0, 1.05)),
+        ("eval_detox_quality", "Detox Quality Selection Score (↑ better)", "phase2_detox_quality_curves.png", None),
+        ("eval_copy_rate_high", "High Source-Copy Rate (↓ better)", "phase2_copy_rate_high_curves.png", (0, 1.05)),
+    ]:
+        fig, ax = plt.subplots(figsize=(9, 5))
+        any_data = plot_phase2_metric(
+            ax,
+            metric_key,
+            metric_label,
+            ylim=ylim,
+            title=f"Stage 2 — Phase 2: {metric_label} by Condition",
+        )
         if any_data:
-            ax.set_xlabel("Step"); ax.set_ylabel(metric_label)
             ax.legend(loc="best", framealpha=0.9); ax.grid(True, alpha=0.3)
             plt.tight_layout()
             p = out_dir / fname
@@ -262,19 +307,44 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             print(f"  Saved: {p}")
         plt.close(fig)
 
+    # ── Phase 2 toxicity dashboard ───────────────────────────────────────────
+    toxicity_panels = [
+        ("eval_sta", "Text STA\n(↑ non-toxic)", "^", (0, 1.05)),
+        ("eval_multimodal_sta", "VisualBERT STA\n(↑ non-hateful)", "^", (0, 1.05)),
+        ("eval_text_toxicity_drop", "Text Toxicity Drop\n(↑ detoxified)", "o", None),
+        ("eval_multimodal_toxicity_drop", "VisualBERT Hate-Prob. Drop\n(↑ less hateful)", "o", None),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    fig.suptitle("Stage 2 — Phase 2: Toxicity Metrics by Condition", fontsize=13, fontweight="bold")
+    any_toxicity_data = False
+    handles = labels = None
+    for ax, (metric_key, metric_label, marker, ylim) in zip(axes.ravel(), toxicity_panels):
+        panel_has_data = plot_phase2_metric(ax, metric_key, metric_label, marker=marker, ylim=ylim)
+        any_toxicity_data = any_toxicity_data or panel_has_data
+        if panel_has_data and handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+    if any_toxicity_data:
+        if handles and labels:
+            fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)), framealpha=0.9)
+        plt.tight_layout(rect=(0, 0.06, 1, 0.96))
+        p = out_dir / "phase2_toxicity_curves.png"
+        fig.savefig(p, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {p}")
+    plt.close(fig)
+
     # ── Phase 2 training loss ─────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 5))
     ax.set_title("Stage 2 — Phase 2: Training Loss by Condition", fontsize=12, fontweight="bold")
     any_data = False
     for h in phase2_hists:
-        cond = h.get("condition", "unknown")
+        cond = canonicalize_condition(h.get("condition", "unknown"))
         train_logs, _ = split_log(h["log_history"])
         if train_logs:
             steps  = [e["step"] for e in train_logs]
             losses = [e["loss"] for e in train_logs]
             w = max(5, len(losses) // 20)
-            sm = smooth(losses, w)
-            ax.plot(steps[w - 1:], sm, color=CONDITION_COLORS.get(cond, "#607D8B"),
+            sm_steps, sm = smooth_xy(steps, losses, w)
+            ax.plot(sm_steps, sm, color=CONDITION_COLORS.get(cond, "#607D8B"),
                     linewidth=2.5, label=CONDITION_LABELS.get(cond, cond))
             any_data = True
     if any_data:
@@ -299,7 +369,8 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
                 steps = [e["step"] for e in tl]; losses = [e["loss"] for e in tl]
                 ax.plot(steps, losses, color=CONDITION_COLORS["phase1"], linewidth=1, alpha=0.4)
                 w = max(5, len(losses) // 20)
-                ax.plot(steps[w-1:], smooth(losses, w), color=CONDITION_COLORS["phase1"], linewidth=2.5)
+                sm_steps, sm_losses = smooth_xy(steps, losses, w)
+                ax.plot(sm_steps, sm_losses, color=CONDITION_COLORS["phase1"], linewidth=2.5)
         ax.set_xlabel("Step"); ax.set_ylabel("Loss"); ax.grid(True, alpha=0.3)
 
         # P1 eval loss
@@ -314,7 +385,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         # P2 eval loss
         ax = axes[2]; ax.set_title("P2 Validation Loss")
         for h in phase2_hists:
-            cond = h.get("condition", "unknown")
+            cond = canonicalize_condition(h.get("condition", "unknown"))
             _, el = split_log(h["log_history"])
             entries = [e for e in el if "eval_loss" in e]
             if entries:
@@ -326,7 +397,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         # P2 rougeL
         ax = axes[3]; ax.set_title("P2 ROUGE-L")
         for h in phase2_hists:
-            cond = h.get("condition", "unknown")
+            cond = canonicalize_condition(h.get("condition", "unknown"))
             _, el = split_log(h["log_history"])
             entries = [e for e in el if "eval_rougeL" in e]
             if entries:
@@ -353,7 +424,7 @@ def main():
     parser.add_argument("--phase",      type=str, default=None, choices=["phase1", "phase2"],
                         help="Required when using --checkpoint_dir")
     parser.add_argument("--condition",  type=str, default=None,
-                        choices=["full", "target_only", "attack_only", "none"],
+                        choices=["full", "target_only", "visual_only", "none"],
                         help="Required for phase2 when using --checkpoint_dir")
     parser.add_argument("--output_dir", type=str, required=True,
                         help="Where to save PNG plots")
@@ -391,7 +462,7 @@ def main():
                 if phase == "phase1":
                     phase1_hist = hist
                 else:
-                    hist["condition"] = condition   # ensure it's set
+                    hist["condition"] = canonicalize_condition(condition)   # ensure it's set
                     phase2_hists.append(hist)
 
     elif args.checkpoint_dir:
@@ -404,7 +475,7 @@ def main():
             if args.phase == "phase1":
                 phase1_hist = hist
             else:
-                hist["condition"] = args.condition
+                hist["condition"] = canonicalize_condition(args.condition)
                 phase2_hists.append(hist)
     else:
         print("ERROR: provide --scratch_root or --checkpoint_dir")
@@ -422,7 +493,7 @@ def main():
     for h in phase2_hists:
         n = len(h.get("log_history", []))
         print(f"  Phase 2 [{h.get('condition','?')}]:  ✓  ({n} log entries)")
-    for cond in ["full", "target_only", "attack_only", "none"]:
+    for cond in ["full", "target_only", "visual_only", "none"]:
         if not any(h.get("condition") == cond for h in phase2_hists):
             print(f"  Phase 2 [{cond}]:  ✗  (no recoverable data)")
 

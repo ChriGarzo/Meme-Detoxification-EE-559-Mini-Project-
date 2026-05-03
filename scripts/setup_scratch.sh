@@ -13,7 +13,7 @@ mkdir -p /scratch/hmr_stage2_dataset
 mkdir -p /scratch/hmr_stage2_phase1_checkpoint
 mkdir -p /scratch/hmr_stage2_phase2_full_checkpoint
 mkdir -p /scratch/hmr_stage2_phase2_target_only_checkpoint
-mkdir -p /scratch/hmr_stage2_phase2_attack_only_checkpoint
+mkdir -p /scratch/hmr_stage2_phase2_visual_only_checkpoint
 mkdir -p /scratch/hmr_stage2_phase2_none_checkpoint
 mkdir -p /scratch/hmr_proxy_checkpoint
 mkdir -p /scratch/hmr_eval_results

@@ -71,6 +71,8 @@ runai submit hmr-plot-curves \
     --existing-pvc claimname=home,path=/home/${USERNAME} \
     --existing-pvc claimname=course-ee-559-scratch-g31,path=/scratch \
     --command -- bash -c "
+        mkdir -p /tmp/mplconfig-${UID_NUM}
+        export MPLCONFIGDIR=/tmp/mplconfig-${UID_NUM}
         pip install matplotlib --quiet --break-system-packages 2>/dev/null || true
         python3 ${SCRIPT_PATH} \
             --scratch_root /scratch \

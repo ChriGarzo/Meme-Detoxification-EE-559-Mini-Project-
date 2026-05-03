@@ -73,6 +73,7 @@ runai submit hmr-build-stage2-dataset \
     --command -- python3 ${SCRIPT_PATH} \
         --stage1_dir /scratch/hmr_stage1_output \
         --output_dir /scratch/hmr_stage2_dataset \
-        --hf_cache /scratch/hf_cache
+        --hf_cache /scratch/hf_cache \
+        --max_source_similarity 0.95
 
 echo "Build Stage 2 dataset job submitted."

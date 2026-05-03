@@ -9,7 +9,9 @@ Evaluation tracks at every checkpoint:
   - ROUGE-1/2/L       (text quality vs LLaVA pseudo-rewrites)
   - Collapse rate     (degenerate output detection)
   - Text STA          (s-nlp/roberta_toxicity_classifier, text-only)
-  - Multimodal STA    (chiragmittal92/visualbert-hateful-memes-finetuned-model,
+  - Text toxicity drop vs original text
+  - Multimodal STA / hate probability drop
+                       (chiragmittal92/visualbert-hateful-memes-finetuned-model,
                        image + generated text — EVALUATION ONLY, no gradient
                        signal; images never influence training)
 
@@ -39,11 +41,14 @@ Usage (cluster):
 """
 
 import argparse
+import difflib
 import inspect
 import json
 import logging
+import math
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -104,7 +109,7 @@ def _build_stage1_image_index(stage1_output_dir: str) -> Dict[str, str]:
 # Multimodal toxicity metric (VisualBERT, eval-only, no gradient signal)
 # ---------------------------------------------------------------------------
 
-def _compute_multimodal_sta(
+def _compute_multimodal_toxicity(
     texts: List[str],
     image_paths: List[str],
     vb_model,
@@ -113,9 +118,9 @@ def _compute_multimodal_sta(
     clip_processor,
     device: str,
     batch_size: int = 16,
-) -> Optional[float]:
+) -> Optional[Dict[str, float]]:
     """
-    Proportion of (image, generated_text) pairs classified as non-hateful
+    Toxicity summary for (image, text) pairs classified by VisualBERT
     by chiragmittal92/visualbert-hateful-memes-finetuned-model.
 
     Visual features: CLIP-ViT-Large/14 image embeddings (768-dim) zero-padded
@@ -129,10 +134,12 @@ def _compute_multimodal_sta(
         if p and Path(p).exists()
     ]
     if not valid_pairs:
-        logger.warning("No valid image paths — multimodal STA skipped")
+        logger.warning("No valid image paths — multimodal toxicity skipped")
         return None
 
     non_hateful = 0
+    hate_prob_sum = 0.0
+    non_hate_prob_sum = 0.0
     total = 0
 
     for i in range(0, len(valid_pairs), batch_size):
@@ -142,9 +149,12 @@ def _compute_multimodal_sta(
 
         # Load images and extract CLIP visual features
         try:
-            images = [Image.open(p).convert("RGB") for p in batch_paths]
+            images = []
+            for p in batch_paths:
+                with Image.open(p) as img:
+                    images.append(img.convert("RGB"))
         except Exception as e:
-            logger.warning(f"Image load error in multimodal STA batch {i}: {e}")
+            logger.warning(f"Image load error in multimodal toxicity batch {i}: {e}")
             continue
 
         clip_inputs = clip_processor(images=images, return_tensors="pt")
@@ -178,13 +188,25 @@ def _compute_multimodal_sta(
                 visual_embeds=visual_embeds,
             )
 
-        preds = logits.argmax(dim=-1)  # 0=not hateful, 1=hateful
+        probs = torch.softmax(logits, dim=-1)
+        preds = probs.argmax(dim=-1)  # 0=not hateful, 1=hateful
         non_hateful += (preds == 0).sum().item()
+        non_hate_prob_sum += probs[:, 0].sum().item()
+        hate_prob_sum += probs[:, 1].sum().item()
         total += B
 
     if total == 0:
         return None
-    return round(non_hateful / total, 4)
+    sta = non_hateful / total
+    hate_prob_mean = hate_prob_sum / total
+    non_hate_prob_mean = non_hate_prob_sum / total
+    return {
+        "multimodal_sta": round(sta, 4),
+        "multimodal_hate_prob_mean": round(hate_prob_mean, 4),
+        "multimodal_non_hate_prob_mean": round(non_hate_prob_mean, 4),
+        "multimodal_hate_pred_rate": round(1.0 - sta, 4),
+        "multimodal_n_valid": float(total),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -207,12 +229,24 @@ def format_input(
         prefix = f"[T: {tg}] [V: {ve}] [M: {im}]"
     elif condition == "target_only":
         prefix = f"[T: {tg}] [V: null] [M: null]"
-    elif condition in {"visual_only", "attack_only"}:
+    elif condition == "visual_only":
         prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # "none"
         prefix = "[T: null] [V: null] [M: null]"
 
     return f"{prefix} | {original_text}"
+
+
+def _normalize_for_compare(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
+def normalized_char_similarity(a: str, b: str) -> float:
+    left = _normalize_for_compare(a)
+    right = _normalize_for_compare(b)
+    if not left and not right:
+        return 1.0
+    return difflib.SequenceMatcher(None, left, right).ratio()
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +278,7 @@ class MemeRewriteDataset(Dataset):
         input_text = format_input(
             original_text=ex.get("original_text", ""),
             target_group=ex.get("target_group"),
-            visual_evidence=ex.get("visual_evidence", ex.get("attack_type")),
+            visual_evidence=ex.get("visual_evidence"),
             implicit_meaning=ex.get("implicit_meaning"),
             condition=self.condition,
         )
@@ -305,7 +339,7 @@ def load_dataset(dataset_dir: str, debug: bool) -> tuple:
                 "original_text":    e["text"],
                 "target_text":      e.get("explanation", {}).get("implicit_meaning", e["text"]),
                 "target_group":     e.get("target_group"),
-                "visual_evidence":  e.get("visual_evidence", e.get("attack_type")),
+                "visual_evidence":  e.get("visual_evidence"),
                 "implicit_meaning": (e.get("explanation") or {}).get("implicit_meaning"),
                 "image_path":       e.get("image_path", ""),
                 "dataset":          "debug",
@@ -430,7 +464,7 @@ def main():
             pipeline as hf_pipeline,
         )
         import evaluate as hf_evaluate
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import LoraConfig, PeftModel, TaskType, get_peft_model
     except ImportError as e:
         logger.error(f"Missing package: {e}. Install: pip install transformers evaluate peft")
         sys.exit(1)
@@ -450,6 +484,7 @@ def main():
         "num_beams":              4,
         "early_stopping":         True,
         "no_repeat_ngram_size":   3,
+        "encoder_no_repeat_ngram_size": 3,
         "forced_bos_token_id":    None,
         "forced_eos_token_id":    tokenizer.eos_token_id,
         "max_length":             64,
@@ -571,11 +606,29 @@ def main():
             vb_config = VisualBertConfig.from_pretrained(mm_model_id, cache_dir=args.hf_cache)
             vb_model = _VBClassifier(vb_config)
 
-            # Load raw weights from Hub — the checkpoint uses pytorch_model.bin
-            ckpt_path = hf_hub_download(
-                mm_model_id, "pytorch_model.bin", cache_dir=args.hf_cache
-            )
-            state_dict = torch.load(ckpt_path, map_location="cpu")
+            state_dict = None
+            load_errors = []
+            for weights_name in ("model.safetensors", "pytorch_model.bin"):
+                try:
+                    ckpt_path = hf_hub_download(
+                        mm_model_id,
+                        weights_name,
+                        cache_dir=args.hf_cache,
+                    )
+                    if weights_name.endswith(".safetensors"):
+                        from safetensors.torch import load_file as safe_load_file
+                        state_dict = safe_load_file(ckpt_path, device="cpu")
+                    else:
+                        state_dict = torch.load(ckpt_path, map_location="cpu")
+                    logger.info("VisualBERT weights loaded from %s", weights_name)
+                    break
+                except Exception as load_exc:
+                    load_errors.append(f"{weights_name}: {load_exc}")
+            if state_dict is None:
+                raise RuntimeError(
+                    "Could not download VisualBERT weights. Tried: "
+                    + " | ".join(load_errors)
+                )
             missing, unexpected = vb_model.load_state_dict(state_dict, strict=False)
             if missing:
                 logger.warning(f"VisualBERT: {len(missing)} missing keys after load")
@@ -607,8 +660,32 @@ def main():
             )
             logger.info("CLIP loaded and frozen.")
         except Exception as e:
-            logger.warning(f"Could not load multimodal models: {e}. Multimodal STA disabled.")
+            logger.warning(f"Could not load multimodal models: {e}. Multimodal toxicity disabled.")
             vb_model = vb_tokenizer = clip_eval_model = clip_eval_proc = None
+
+    val_original_multimodal_metrics: Optional[Dict[str, float]] = None
+    if (
+        vb_model is not None
+        and vb_tokenizer is not None
+        and clip_eval_model is not None
+        and clip_eval_proc is not None
+    ):
+        logger.info("Precomputing original validation multimodal toxicity...")
+        val_original_multimodal_metrics = _compute_multimodal_toxicity(
+            texts=val_original_texts,
+            image_paths=val_image_paths,
+            vb_model=vb_model,
+            vb_tokenizer=vb_tokenizer,
+            clip_model=clip_eval_model,
+            clip_processor=clip_eval_proc,
+            device=device,
+        )
+        if val_original_multimodal_metrics:
+            logger.info(
+                "Original val multimodal_sta: %.4f  |  multimodal_hate_prob_mean: %.4f",
+                val_original_multimodal_metrics.get("multimodal_sta", 0.0),
+                val_original_multimodal_metrics.get("multimodal_hate_prob_mean", 0.0),
+            )
 
     # -----------------------------------------------------------------------
     # Text-only STA classifier (s-nlp/roberta_toxicity_classifier)
@@ -632,15 +709,39 @@ def main():
 
     def compute_sta_score(texts: List[str]) -> float:
         """Proportion of texts classified as non-toxic (text-only)."""
-        non_toxic = 0
+        tox_probs = compute_text_toxicity_probs(texts)
+        return round(
+            sum(1 for p in tox_probs if p < 0.5) / max(1, len(tox_probs)),
+            4,
+        )
+
+    def compute_text_toxicity_probs(texts: List[str]) -> List[float]:
+        """Estimate P(toxic) from the text-only classifier."""
+        tox_probs: List[float] = []
         for i in range(0, len(texts), 32):
             batch = texts[i : i + 32]
             try:
                 results = toxicity_pipe(batch)
-                non_toxic += sum(1 for r in results if r["label"].lower() != "toxic")
+                for r in results:
+                    label = str(r.get("label", "")).lower()
+                    score = float(r.get("score", 0.0))
+                    tox_probs.append(score if label == "toxic" else 1.0 - score)
             except Exception as e:
                 logger.warning(f"Text STA batch failed: {e}")
-        return round(non_toxic / max(1, len(texts)), 4)
+                tox_probs.extend([0.5] * len(batch))
+        return tox_probs
+
+    logger.info("Precomputing original validation text toxicity...")
+    val_original_toxicity_probs = compute_text_toxicity_probs(val_original_texts)
+    val_original_toxicity_mean = (
+        sum(val_original_toxicity_probs) / max(1, len(val_original_toxicity_probs))
+        if val_original_toxicity_probs else 0.0
+    )
+    val_original_text_sta = (
+        sum(1 for p in val_original_toxicity_probs if p < 0.5)
+        / max(1, len(val_original_toxicity_probs))
+        if val_original_toxicity_probs else 0.0
+    )
 
     def _is_collapsed_output(text: str) -> bool:
         stripped = (text or "").strip()
@@ -687,11 +788,59 @@ def main():
                 metrics[key] = 0.0
 
         # Text-only STA
-        metrics["sta"] = compute_sta_score(decoded_preds)
+        pred_toxicity_probs = compute_text_toxicity_probs(decoded_preds)
+        metrics["sta"] = round(
+            sum(1 for p in pred_toxicity_probs if p < 0.5) / max(1, len(pred_toxicity_probs)),
+            4,
+        )
+        if val_original_toxicity_probs:
+            paired = list(zip(val_original_toxicity_probs, pred_toxicity_probs))
+            metrics["text_toxicity_drop"] = round(
+                sum(orig - pred for orig, pred in paired) / max(1, len(paired)),
+                4,
+            )
+            metrics["pred_toxicity_mean"] = round(
+                sum(pred_toxicity_probs) / max(1, len(pred_toxicity_probs)),
+                4,
+            )
+            metrics["original_toxicity_mean"] = round(val_original_toxicity_mean, 4)
+            metrics["text_sta_delta"] = round(metrics["sta"] - val_original_text_sta, 4)
 
-        # Multimodal STA (VisualBERT — image + generated text, no gradient)
-        if vb_model is not None and vb_tokenizer is not None:
-            mm_sta = _compute_multimodal_sta(
+        source_sims = [
+            normalized_char_similarity(orig, pred)
+            for orig, pred in zip(val_original_texts, decoded_preds)
+        ]
+        exact_copies = [
+            _normalize_for_compare(orig) == _normalize_for_compare(pred)
+            for orig, pred in zip(val_original_texts, decoded_preds)
+        ]
+        metrics["source_similarity_mean"] = round(
+            sum(source_sims) / max(1, len(source_sims)),
+            4,
+        )
+        metrics["copy_rate_exact"] = round(
+            sum(1 for x in exact_copies if x) / max(1, len(exact_copies)),
+            4,
+        )
+        metrics["copy_rate_high"] = round(
+            sum(1 for x in source_sims if x >= 0.85) / max(1, len(source_sims)),
+            4,
+        )
+        metrics["detox_quality"] = round(
+            metrics.get("text_toxicity_drop", 0.0)
+            + 0.10 * metrics.get("rougeL", 0.0)
+            - 0.25 * metrics["copy_rate_high"],
+            4,
+        )
+
+        # Multimodal toxicity (VisualBERT — image + generated text, no gradient)
+        if (
+            vb_model is not None
+            and vb_tokenizer is not None
+            and clip_eval_model is not None
+            and clip_eval_proc is not None
+        ):
+            mm_metrics = _compute_multimodal_toxicity(
                 texts=decoded_preds,
                 image_paths=val_image_paths,
                 vb_model=vb_model,
@@ -700,23 +849,56 @@ def main():
                 clip_processor=clip_eval_proc,
                 device=device,
             )
-            if mm_sta is not None:
-                metrics["multimodal_sta"] = mm_sta
+            if mm_metrics is not None:
+                metrics.update(mm_metrics)
+                if val_original_multimodal_metrics:
+                    original_mm_hate = val_original_multimodal_metrics.get(
+                        "multimodal_hate_prob_mean"
+                    )
+                    original_mm_sta = val_original_multimodal_metrics.get("multimodal_sta")
+                    if original_mm_hate is not None:
+                        metrics["multimodal_toxicity_drop"] = round(
+                            original_mm_hate - metrics["multimodal_hate_prob_mean"],
+                            4,
+                        )
+                    if original_mm_sta is not None:
+                        metrics["multimodal_sta_delta"] = round(
+                            metrics["multimodal_sta"] - original_mm_sta,
+                            4,
+                        )
                 logger.info(
                     "  eval multimodal_sta: %.4f  |  text_sta: %.4f  |  "
+                    "text_tox_drop: %.4f  |  mm_tox_drop: %.4f  |  "
+                    "copy_high: %.4f  |  detox_quality: %.4f  |  "
                     "rougeL: %.4f  |  collapse_rate: %.4f",
-                    mm_sta, metrics["sta"],
+                    metrics["multimodal_sta"], metrics["sta"],
+                    metrics.get("text_toxicity_drop", 0.0),
+                    metrics.get("multimodal_toxicity_drop", 0.0),
+                    metrics["copy_rate_high"],
+                    metrics["detox_quality"],
                     metrics.get("rougeL", 0.0), metrics["collapse_rate"],
                 )
             else:
                 logger.info(
-                    "  eval text_sta: %.4f  |  rougeL: %.4f  |  collapse_rate: %.4f",
-                    metrics["sta"], metrics.get("rougeL", 0.0), metrics["collapse_rate"],
+                    "  eval text_sta: %.4f  |  tox_drop: %.4f  |  copy_high: %.4f  |  "
+                    "detox_quality: %.4f  |  rougeL: %.4f  |  collapse_rate: %.4f",
+                    metrics["sta"],
+                    metrics.get("text_toxicity_drop", 0.0),
+                    metrics["copy_rate_high"],
+                    metrics["detox_quality"],
+                    metrics.get("rougeL", 0.0),
+                    metrics["collapse_rate"],
                 )
         else:
             logger.info(
-                "  eval text_sta: %.4f  |  rougeL: %.4f  |  collapse_rate: %.4f",
-                metrics["sta"], metrics.get("rougeL", 0.0), metrics["collapse_rate"],
+                "  eval text_sta: %.4f  |  tox_drop: %.4f  |  copy_high: %.4f  |  "
+                "detox_quality: %.4f  |  rougeL: %.4f  |  collapse_rate: %.4f",
+                metrics["sta"],
+                metrics.get("text_toxicity_drop", 0.0),
+                metrics["copy_rate_high"],
+                metrics["detox_quality"],
+                metrics.get("rougeL", 0.0),
+                metrics["collapse_rate"],
             )
 
         # 5 qualitative examples: original → generated → reference
@@ -758,13 +940,15 @@ def main():
         "save_strategy":                  "steps",
         "save_steps":                     save_steps,
         "load_best_model_at_end":         False,
-        "metric_for_best_model":          "eval_rougeL",
+        "metric_for_best_model":          "eval_detox_quality",
         "greater_is_better":              True,
         "logging_steps":                  DEBUG_CONFIG["logging_steps"] if debug else 25,
         "seed":                           args.seed,
         "report_to":                      "none",
         "save_total_limit":               5,
     }
+    if "overwrite_output_dir" in seq2seq_args_params:
+        training_kwargs["overwrite_output_dir"] = True
     if "generation_min_length" in seq2seq_args_params:
         training_kwargs["generation_min_length"] = 8
     if "fp16" in seq2seq_args_params:
@@ -790,7 +974,9 @@ def main():
 
     trainer = Seq2SeqTrainer(**trainer_kwargs)
 
-    steps_per_epoch = max(1, len(train_dataset) // train_batch)
+    grad_accum = max(1, int(getattr(training_args, "gradient_accumulation_steps", 1)))
+    train_batches_per_epoch = max(1, math.ceil(len(train_dataset) / train_batch))
+    steps_per_epoch = max(1, math.ceil(train_batches_per_epoch / grad_accum))
     total_steps = steps_per_epoch * num_epochs
     logger.info(f"Dataset: {len(train_dataset)} train, {len(val_dataset)} val")
     logger.info(f"Steps:   {steps_per_epoch} per epoch × {num_epochs} epochs = {total_steps} total")
@@ -803,14 +989,20 @@ def main():
     _input_str = format_input(
         original_text=_sample.get("original_text", "test input"),
         target_group=_sample.get("target_group"),
-        visual_evidence=_sample.get("visual_evidence", _sample.get("attack_type")),
+        visual_evidence=_sample.get("visual_evidence"),
         implicit_meaning=_sample.get("implicit_meaning"),
         condition=args.condition,
     )
     _enc = tokenizer(_input_str, return_tensors="pt", truncation=True, max_length=128)
     _dev = next(model.parameters()).device
     _enc = {k: v.to(_dev) for k, v in _enc.items()}
-    sanity_gen_kwargs = {"max_new_tokens": 32, "num_beams": 4, "early_stopping": True}
+    sanity_gen_kwargs = {
+        "max_new_tokens": 32,
+        "num_beams": 4,
+        "early_stopping": True,
+        "no_repeat_ngram_size": 3,
+        "encoder_no_repeat_ngram_size": 3,
+    }
     if "min_new_tokens" in inspect.signature(model.generate).parameters:
         sanity_gen_kwargs["min_new_tokens"] = 8
     with torch.no_grad():
@@ -839,18 +1031,75 @@ def main():
     # -----------------------------------------------------------------------
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 1. Save LoRA adapter weights for reference / later re-use
+    eval_entries = [e for e in trainer.state.log_history if "eval_loss" in e]
+    min_eval_loss = min((e.get("eval_loss") for e in eval_entries), default=None)
+    best_eval_entry = None
+    if eval_entries:
+        best_eval_entry = max(
+            eval_entries,
+            key=lambda e: (
+                e.get("eval_detox_quality")
+                if e.get("eval_detox_quality") is not None
+                else e.get("eval_rougeL", float("-inf"))
+            ),
+        )
+    best_step = int(best_eval_entry["step"]) if best_eval_entry and best_eval_entry.get("step") else None
+    best_checkpoint_dir = (
+        Path(args.output_dir) / f"checkpoint-{best_step}"
+        if best_step is not None
+        else None
+    )
+    use_best_checkpoint = bool(best_checkpoint_dir and best_checkpoint_dir.exists())
+
+    # 1. Save LoRA adapter weights for reference / later re-use.  Prefer the
+    #    best eval checkpoint rather than the final training step.
     lora_adapter_dir = os.path.join(args.output_dir, "lora_adapter")
     os.makedirs(lora_adapter_dir, exist_ok=True)
-    trainer.model.save_pretrained(lora_adapter_dir)
-    tokenizer.save_pretrained(lora_adapter_dir)
-    logger.info(f"LoRA adapter saved to {lora_adapter_dir}")
 
-    # 2. Merge adapter into base model — makes the checkpoint compatible with
+    if use_best_checkpoint:
+        logger.info(
+            "Best eval checkpoint selected for export: %s (detox_quality=%s, rougeL=%s, copy_rate_high=%s)",
+            best_checkpoint_dir,
+            best_eval_entry.get("eval_detox_quality"),
+            best_eval_entry.get("eval_rougeL"),
+            best_eval_entry.get("eval_copy_rate_high"),
+        )
+        best_base_model = BartForConditionalGeneration.from_pretrained(
+            checkpoint,
+            cache_dir=args.hf_cache,
+        )
+        best_peft_model = PeftModel.from_pretrained(
+            best_base_model,
+            str(best_checkpoint_dir),
+        )
+        best_peft_model.save_pretrained(lora_adapter_dir)
+        tokenizer.save_pretrained(lora_adapter_dir)
+        logger.info(f"Best LoRA adapter saved to {lora_adapter_dir}")
+        export_model = best_peft_model
+        exported_checkpoint = str(best_checkpoint_dir)
+        exported_is_best = True
+    else:
+        logger.warning(
+            "No best checkpoint directory found; exporting final training step instead."
+        )
+        trainer.model.save_pretrained(lora_adapter_dir)
+        tokenizer.save_pretrained(lora_adapter_dir)
+        logger.info(f"Final LoRA adapter saved to {lora_adapter_dir}")
+        export_model = trainer.model
+        exported_checkpoint = "final_training_step"
+        exported_is_best = False
+
+    final_adapter_dir = os.path.join(args.output_dir, "lora_adapter_final")
+    os.makedirs(final_adapter_dir, exist_ok=True)
+    trainer.model.save_pretrained(final_adapter_dir)
+    tokenizer.save_pretrained(final_adapter_dir)
+    logger.info(f"Final-step LoRA adapter saved to {final_adapter_dir}")
+
+    # 2. Merge exported adapter into base model — makes the checkpoint compatible with
     #    all downstream scripts (run_stage2.py, train_proxy.py, evaluate.py)
     #    that load with BartForConditionalGeneration.from_pretrained().
-    logger.info("Merging LoRA weights into base model...")
-    merged_model = trainer.model.merge_and_unload()
+    logger.info("Merging exported LoRA weights into base model...")
+    merged_model = export_model.merge_and_unload()
     merged_model.generation_config = stored_gen_config
     merged_model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
@@ -859,9 +1108,6 @@ def main():
     # -----------------------------------------------------------------------
     # Save training history
     # -----------------------------------------------------------------------
-    eval_entries  = [e for e in trainer.state.log_history if "eval_loss" in e]
-    min_eval_loss = min((e.get("eval_loss") for e in eval_entries), default=None)
-
     history_data = {
         "phase": "phase2_lora_meme_finetune",
         "condition": args.condition,
@@ -902,16 +1148,18 @@ def main():
         "results": {
             "training_duration_seconds":  round(training_duration, 1),
             "total_steps":                trainer.state.global_step,
-            "best_metric_name":           "eval_rougeL",
-            "best_metric_value":          trainer.state.best_metric,
-            "best_model_checkpoint":      str(trainer.state.best_model_checkpoint)
-                                          if trainer.state.best_model_checkpoint else None,
+            "best_metric_name":           "eval_detox_quality",
+            "best_metric_value":          best_eval_entry.get("eval_detox_quality") if best_eval_entry else None,
+            "best_eval_rougeL":           best_eval_entry.get("eval_rougeL") if best_eval_entry else None,
+            "best_eval_copy_rate_high":   best_eval_entry.get("eval_copy_rate_high") if best_eval_entry else None,
+            "best_eval_text_toxicity_drop": best_eval_entry.get("eval_text_toxicity_drop") if best_eval_entry else None,
+            "best_model_checkpoint":      exported_checkpoint,
+            "exported_is_best_checkpoint": exported_is_best,
             "min_eval_loss":              min_eval_loss,
             "note": (
-                "load_best_model_at_end=False (PEFT compatibility). "
-                "Saved model is from the last training step. "
-                "Best adapter at best_model_checkpoint can be loaded with "
-                "PeftModel.from_pretrained(base_model, best_model_checkpoint)."
+                "Merged model is exported from the best eval_detox_quality checkpoint "
+                "when that checkpoint directory exists; lora_adapter_final preserves "
+                "the final training-step adapter."
             ),
         },
         "log_history": trainer.state.log_history,
@@ -926,9 +1174,11 @@ def main():
     print(f"  Phase 2 LoRA [{args.condition}] COMPLETE")
     print(f"  Merged model:  {args.output_dir}")
     print(f"  LoRA adapter:  {lora_adapter_dir}")
+    print(f"  Final adapter: {final_adapter_dir}")
     print(f"  History:       {history_path}")
     print(f"  Training time: {training_duration/60:.1f} min  |  Steps: {trainer.state.global_step}")
-    print(f"  Best eval_rougeL: {trainer.state.best_metric}")
+    print(f"  Exported checkpoint: {exported_checkpoint}")
+    print(f"  Best eval_detox_quality: {best_eval_entry.get('eval_detox_quality') if best_eval_entry else None}")
     print(f"  LoRA — trainable params: {trainable_params:,} / {total_params:,} "
           f"({100*trainable_params/total_params:.2f}%)")
     print(f"{'='*60}\n")

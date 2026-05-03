@@ -27,7 +27,7 @@ cd "${REPO_DIR}"
 
 # ------------------------------------------------------------
 # Phase 1 — ParaDetox warm-up
-# Teaches BART the detoxification task and the [T:]/[A:]/[M:]
+# Teaches BART the detoxification task and the [T:]/[V:]/[M:]
 # conditioning prefix format before seeing any meme data.
 # ------------------------------------------------------------
 echo ">>> PHASE 1: ParaDetox warm-up"
@@ -54,7 +54,7 @@ echo ""
 #   --warmup_steps 200       longer warmup to prevent forgetting
 #   --paradetox_mix_ratio 0  Phase 1 already provides the detox prior
 # ------------------------------------------------------------
-for CONDITION in full target_only attack_only none; do
+for CONDITION in full target_only visual_only none; do
     PHASE2_OUT="/scratch/hmr_stage2_phase2_${CONDITION}_checkpoint"
     echo ">>> PHASE 2 [${CONDITION}]"
 
@@ -80,5 +80,5 @@ done
 echo "======================================================================"
 echo "  Full Stage 2 pipeline COMPLETE."
 echo "  Phase 1 checkpoint : ${PHASE1_OUT}"
-echo "  Phase 2 checkpoints: /scratch/hmr_stage2_phase2_{full,target_only,attack_only,none}_checkpoint"
+echo "  Phase 2 checkpoints: /scratch/hmr_stage2_phase2_{full,target_only,visual_only,none}_checkpoint"
 echo "======================================================================"

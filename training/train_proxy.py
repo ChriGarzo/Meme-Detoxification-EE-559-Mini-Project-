@@ -86,7 +86,7 @@ def load_stage2_dataset(stage1_output_dir: str, dataset_dir: str, debug: bool) -
                 "image_path":      e["image_path"],
                 "original_text":   e["text"],
                 "target_group":    e.get("target_group"),
-                "attack_type":     e.get("attack_type"),
+                "visual_evidence": e.get("visual_evidence"),
                 "implicit_meaning": (e.get("explanation") or {}).get("implicit_meaning"),
             }
             for e in raw if e.get("label") == 1    # only hateful (have rewrites)
@@ -260,12 +260,12 @@ def main():
         images   = [e["image_path"]      for e in examples]
         texts    = [e["original_text"]   for e in examples]
         tgs      = [e.get("target_group")      for e in examples]
-        ats      = [e.get("attack_type")       for e in examples]
+        ves      = [e.get("visual_evidence")   for e in examples]
         ims      = [e.get("implicit_meaning")  for e in examples]
-        return images, texts, tgs, ats, ims
+        return images, texts, tgs, ves, ims
 
-    tr_images, tr_texts, tr_tgs, tr_ats, tr_ims = _unpack(train_examples)
-    va_images, va_texts, va_tgs, va_ats, va_ims = _unpack(val_examples)
+    tr_images, tr_texts, tr_tgs, tr_ves, tr_ims = _unpack(train_examples)
+    va_images, va_texts, va_tgs, va_ves, va_ims = _unpack(val_examples)
 
     # -----------------------------------------------------------------------
     # Train
@@ -276,12 +276,12 @@ def main():
         images=tr_images,
         texts=tr_texts,
         target_groups=tr_tgs,
-        attack_types=tr_ats,
+        visual_evidences=tr_ves,
         implicit_meanings=tr_ims,
         val_images=va_images,
         val_texts=va_texts,
         val_target_groups=va_tgs,
-        val_attack_types=va_ats,
+        val_visual_evidences=va_ves,
         val_implicit_meanings=va_ims,
         num_epochs=num_epochs,
         batch_size=batch_size,
@@ -308,7 +308,7 @@ def main():
         images=va_images,
         texts=va_texts,
         target_groups=va_tgs,
-        attack_types=va_ats,
+        visual_evidences=va_ves,
         implicit_meanings=va_ims,
     )
     logger.info(f"Proxy eval MSE: {eval_results['mse_loss']:.6f}")

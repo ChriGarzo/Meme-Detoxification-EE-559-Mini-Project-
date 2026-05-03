@@ -186,7 +186,7 @@ class ExplanationProxyTrainer:
         self,
         texts: List[str],
         target_groups: List[Optional[str]],
-        attack_types: List[Optional[str]],
+        visual_evidences: List[Optional[str]],
         implicit_meanings: List[Optional[str]],
     ) -> torch.Tensor:
         """
@@ -195,7 +195,7 @@ class ExplanationProxyTrainer:
         Args:
             texts: List of original texts
             target_groups: List of target groups
-            attack_types: List of attack types
+            visual_evidences: List of visual evidence cues
             implicit_meanings: List of implicit meanings
 
         Returns:
@@ -206,13 +206,13 @@ class ExplanationProxyTrainer:
 
         hidden_states = []
 
-        for text, tg, at, im in zip(
-            texts, target_groups, attack_types, implicit_meanings
+        for text, tg, ve, im in zip(
+            texts, target_groups, visual_evidences, implicit_meanings
         ):
             h = self.rewriter.get_encoder_hidden_state(
                 text,
                 target_group=tg,
-                attack_type=at,
+                visual_evidence=ve,
                 implicit_meaning=im,
                 mode="full",
             )
@@ -229,12 +229,12 @@ class ExplanationProxyTrainer:
         images: List,
         texts: List[str],
         target_groups: List[Optional[str]],
-        attack_types: List[Optional[str]],
+        visual_evidences: List[Optional[str]],
         implicit_meanings: List[Optional[str]],
         val_images: Optional[List] = None,
         val_texts: Optional[List[str]] = None,
         val_target_groups: Optional[List[Optional[str]]] = None,
-        val_attack_types: Optional[List[Optional[str]]] = None,
+        val_visual_evidences: Optional[List[Optional[str]]] = None,
         val_implicit_meanings: Optional[List[Optional[str]]] = None,
         num_epochs: int = 10,
         batch_size: int = 32,
@@ -248,12 +248,12 @@ class ExplanationProxyTrainer:
             images: List of training images
             texts: List of training texts
             target_groups: List of training target groups
-            attack_types: List of training attack types
+            visual_evidences: List of training visual evidence cues
             implicit_meanings: List of training implicit meanings
             val_images: List of validation images (optional)
             val_texts: List of validation texts (optional)
             val_target_groups: List of validation target groups (optional)
-            val_attack_types: List of validation attack types (optional)
+            val_visual_evidences: List of validation visual evidence cues (optional)
             val_implicit_meanings: List of validation implicit meanings (optional)
             num_epochs: Number of training epochs
             batch_size: Batch size
@@ -267,7 +267,7 @@ class ExplanationProxyTrainer:
         clip_batch_size = min(max(batch_size, 1), 16)
         train_features = self.extract_clip_features(images, texts, batch_size=clip_batch_size)
         train_targets = self.extract_bart_targets(
-            texts, target_groups, attack_types, implicit_meanings
+            texts, target_groups, visual_evidences, implicit_meanings
         )
 
         has_val = all(
@@ -276,7 +276,7 @@ class ExplanationProxyTrainer:
                 val_images,
                 val_texts,
                 val_target_groups,
-                val_attack_types,
+                val_visual_evidences,
                 val_implicit_meanings,
             ]
         )
@@ -285,7 +285,7 @@ class ExplanationProxyTrainer:
             logger.info("Extracting validation features...")
             val_features = self.extract_clip_features(val_images, val_texts, batch_size=clip_batch_size)
             val_targets = self.extract_bart_targets(
-                val_texts, val_target_groups, val_attack_types, val_implicit_meanings
+                val_texts, val_target_groups, val_visual_evidences, val_implicit_meanings
             )
 
         # Create dataloaders
@@ -366,7 +366,7 @@ class ExplanationProxyTrainer:
         images: List,
         texts: List[str],
         target_groups: List[Optional[str]],
-        attack_types: List[Optional[str]],
+        visual_evidences: List[Optional[str]],
         implicit_meanings: List[Optional[str]],
     ) -> Dict[str, float]:
         """
@@ -376,7 +376,7 @@ class ExplanationProxyTrainer:
             images: List of evaluation images
             texts: List of evaluation texts
             target_groups: List of target groups
-            attack_types: List of attack types
+            visual_evidences: List of visual evidence cues
             implicit_meanings: List of implicit meanings
 
         Returns:
@@ -385,7 +385,7 @@ class ExplanationProxyTrainer:
         logger.info("Extracting evaluation features...")
         features = self.extract_clip_features(images, texts, batch_size=16)
         targets = self.extract_bart_targets(
-            texts, target_groups, attack_types, implicit_meanings
+            texts, target_groups, visual_evidences, implicit_meanings
         )
 
         # Evaluation

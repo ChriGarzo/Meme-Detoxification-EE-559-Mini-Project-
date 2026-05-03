@@ -11,9 +11,14 @@ set -e
 # Example:
 #   bash scripts/runai_evaluate.sh 123456
 #
-# Note: Run this AFTER all Stage 2 Phase 2 jobs and proxy training have completed.
-#       Runs inference for all 4 BART conditions + proxy pipeline + baselines,
-#       then computes STA/SIM/CLIPScore/RewritePrecision/J metrics.
+# Note: Run this AFTER all Stage 2 Phase 2 jobs have completed.
+#       Runs inference for:
+#         - non-finetuned BART-large under all 4 visual-evidence conditions
+#         - finetuned BART-large under all 4 visual-evidence conditions
+#       Inference is restricted to /scratch/hmr_stage2_dataset/val.jsonl.
+#       Then compares those outputs against the validation target_text
+#       pseudo-rewrites.
+#       Metrics include text STA and VisualBERT multimodal toxicity.
 # =============================================================================
 
 # --- Validate args ---
@@ -53,6 +58,17 @@ if [ ! -f "${EVAL_SCRIPT}" ]; then
     fi
 fi
 
+JOB_SCRIPT="${CODE_ROOT}/scripts/run_evaluate_job.sh"
+if [ ! -f "${JOB_SCRIPT}" ]; then
+    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/scripts/run_evaluate_job.sh" ]; then
+        echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
+    else
+        echo "ERROR: Evaluation job script not found at: ${JOB_SCRIPT}"
+        echo "Check that the repository exists at ${CODE_ROOT}."
+        exit 1
+    fi
+fi
+
 echo "=== Stage 3: Full Evaluation ==="
 echo "  User:  ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:  ${MODE_LABEL}"
@@ -72,52 +88,10 @@ runai submit hmr-evaluate \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
     --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
-    --command -- bash -c "\
-        echo '=== BART inference — all 4 conditions ===' && \
-        for COND in full target_only attack_only none; do \
-            python3 ${CODE_ROOT}/inference/run_stage2.py \
-                --condition \${COND} \
-                --checkpoint_dir /scratch/hmr_stage2_phase2_\${COND}_checkpoint \
-                --stage1_output_dir /scratch/hmr_stage1_output \
-                --output_dir /scratch/hmr_eval_stage2_\${COND} \
-                --hf_cache /scratch/hf_cache ; \
-        done && \
-        echo '=== Proxy pipeline (no LLaVA) ===' && \
-        python3 ${CODE_ROOT}/inference/run_proxy_pipeline.py \
-            --proxy_checkpoint_dir /scratch/hmr_proxy_checkpoint \
-            --stage1_output_dir /scratch/hmr_stage1_output \
-            --output_dir /scratch/hmr_eval_proxy \
-            --hf_cache /scratch/hf_cache && \
-        echo '=== LLaVA end-to-end baseline ===' && \
-        python3 ${CODE_ROOT}/baselines/run_llava_baseline.py \
-            --mode end_to_end \
-            --stage1_output_dir /scratch/hmr_stage1_output \
-            --output_dir /scratch/hmr_eval_llava_e2e \
-            --hf_cache /scratch/hf_cache && \
-        echo '=== LLaVA structured-prompt baseline ===' && \
-        python3 ${CODE_ROOT}/baselines/run_llava_baseline.py \
-            --mode structured_prompt \
-            --stage1_output_dir /scratch/hmr_stage1_output \
-            --output_dir /scratch/hmr_eval_llava_struct \
-            --hf_cache /scratch/hf_cache && \
-        echo '=== DetoxLLM text-only baseline ===' && \
-        python3 ${CODE_ROOT}/baselines/run_detoxllm_baseline.py \
-            --stage1_output_dir /scratch/hmr_stage1_output \
-            --output_dir /scratch/hmr_eval_detoxllm \
-            --hf_cache /scratch/hf_cache && \
-        echo '=== Final evaluation ===' && \
-        python3 ${EVAL_SCRIPT} \
-            --stage2_output_dirs \
-                /scratch/hmr_eval_stage2_full \
-                /scratch/hmr_eval_stage2_target_only \
-                /scratch/hmr_eval_stage2_attack_only \
-                /scratch/hmr_eval_stage2_none \
-            --proxy_output_dir /scratch/hmr_eval_proxy \
-            --llava_output_dir /scratch/hmr_eval_llava_e2e \
-            --llava_struct_output_dir /scratch/hmr_eval_llava_struct \
-            --detoxllm_output_dir /scratch/hmr_eval_detoxllm \
-            --output_dir /scratch/hmr_eval_results \
-            --hf_cache /scratch/hf_cache \
-    "
+    --command -- bash "${JOB_SCRIPT}" "${CODE_ROOT}"
 
 echo "Full evaluation job submitted."
+echo "Watch logs with:"
+echo "  runai logs hmr-evaluate --follow"
+echo "When complete, outputs should be under:"
+echo "  /scratch/hmr_eval_results"
