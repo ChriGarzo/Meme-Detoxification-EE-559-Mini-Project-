@@ -52,7 +52,7 @@ Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel) 
                ▼
 Stage 4 ──── Proxy network training  [GPU]
                │  3-layer MLP: concat(CLIP image + CLIP text) [1536-dim]
-               │    → BART encoder hidden state [1024-dim]
+               │    → short BART encoder-memory sequence [K × 1024]
                │  Enables VLM-free inference at deployment
                ▼
 Stage 3 ──── Evaluation  [GPU]
@@ -90,7 +90,7 @@ hateful_meme_rewriting/
 ├── models/
 │   ├── explainer.py                   ← LLaVA-Next wrapper
 │   ├── rewriter.py                    ← BART wrapper (+ generate_from_formatted)
-│   └── proxy.py                       ← ExplanationProxy MLP + CLIP
+│   └── proxy.py                       ← CLIP → BART soft-token ExplanationProxy
 │
 ├── inference/
 │   ├── run_stage1.py                  ← legacy Stage 1 entrypoint
@@ -99,7 +99,7 @@ hateful_meme_rewriting/
 │   ├── merge_stage1_explanations_shards.py     ← merges explanation shards
 │   ├── merge_stage1_rewrites_shards.py         ← merges rewrite shards
 │   ├── run_stage2.py                  ← BART inference over filtered memes
-│   └── run_proxy_pipeline.py          ← VLM-free inference via proxy
+│   └── run_proxy_pipeline.py          ← VLM-free proxy → BART-full inference
 │
 ├── training/
 │   ├── train_stage2_phase1.py         ← ParaDetox warm-up (kept for reference, not run in current pipeline)
@@ -138,6 +138,9 @@ hateful_meme_rewriting/
     ├── runai_build_stage2_dataset.sh
     ├── runai_stage2_phase2.sh
     ├── runai_train_proxy.sh
+    ├── runai_plot_proxy_curves.sh
+    ├── runai_evaluate_proxy.sh
+    ├── run_proxy_evaluate_job.sh
     └── runai_evaluate.sh
 ```
 
@@ -382,14 +385,31 @@ Metrics tracked at every eval checkpoint: ROUGE-1/2/L, collapse rate, text STA (
 
 Note: Stage 2 Phase 1 (ParaDetox warm-up) is kept in `training/train_stage2_phase1.py` for reference but is not run in the current pipeline. Phase 2 starts directly from `facebook/bart-large`.
 
+**Stage 3 — Standard BART evaluation** (wait for all Stage 2 Phase 2 checkpoints)
+```bash
+bash scripts/runai_evaluate.sh <UID>
+```
+Run this when you want the comparison table for LLaVA teacher, non-finetuned BART, and the four finetuned BART conditions (`full`, `target_only`, `visual_only`, `none`). If those results already exist and the BART checkpoints/input format have not changed, you do not need to rerun it.
+
 **Stage 4 — Train proxy network** (wait for Stage 2 Phase 2 `full` to complete)
 ```bash
 bash scripts/runai_train_proxy.sh <UID>
 ```
-
-**Stage 3 — Evaluation** (wait for all Stage 2 Phase 2 checkpoints)
+The current proxy predicts a short sequence of BART encoder soft tokens rather than a single pooled hidden vector. By default `K=16`; try a longer memory with:
 ```bash
-bash scripts/runai_evaluate.sh <UID>
+PROXY_NUM_SOFT_TOKENS=32 bash scripts/runai_train_proxy.sh <UID>
+```
+
+**Stage 5 — Final proxy + BART-full evaluation** (wait for proxy training and Stage 2 Phase 2 `full`)
+```bash
+bash scripts/runai_evaluate_proxy.sh <UID>
+```
+This runs the final VLM-free sequence on `/scratch/hmr_stage2_dataset/val.jsonl`:
+CLIP image/text features → trained proxy soft-token encoder memory + explicit detox BART text-prompt encoder states → `full` BART decoder.
+It writes proxy rewrites to `/scratch/hmr_eval_proxy_bart_full_proxy_text_explicit/` and standard metrics to `/scratch/hmr_eval_results_proxy_proxy_text_explicit/`.
+To rerun the older legacy `none` bracket-prompt variant:
+```bash
+bash scripts/runai_evaluate_proxy.sh <UID> legacy
 ```
 
 ---
@@ -437,6 +457,8 @@ bash scripts/runai_evaluate.sh <UID>
 ├── hmr_stage2_phase2_visual_only_checkpoint/
 ├── hmr_stage2_phase2_none_checkpoint/
 ├── hmr_proxy_checkpoint/
+├── hmr_eval_proxy_bart_full_proxy/
+├── hmr_eval_results_proxy_proxy/
 └── hmr_eval_results/
 ```
 
@@ -498,7 +520,10 @@ The implemented pipeline follows an explain-then-rewrite strategy:
    - LoRA target modules: `q_proj`, `k_proj`, `v_proj`, `out_proj`, `fc1`, `fc2`.
    - Trainable parameters: about 17M out of about 400M total, roughly 4%.
 
-7. **Train a proxy model.** The repo also contains a proxy stage. The proxy is a small MLP trained from CLIP image/text features to BART encoder hidden states. Its purpose is to support a future VLM-free deployment path. In the current project, the main reported comparison is still the BART fine-tuning/evaluation pipeline.
+7. **Train a proxy model.** The repo also contains a proxy stage. The proxy is a small MLP trained from CLIP image/text features to BART encoder-memory soft tokens. Its purpose is to support a future VLM-free deployment path. In the current project, the main reported comparison is still the BART fine-tuning/evaluation pipeline.
+
+   Proxy inference now evaluates the intended final sequence directly:
+   CLIP image/text embeddings are concatenated, the proxy predicts a short sequence of `full` BART encoder hidden states, and the `full` BART decoder generates the rewrite from that predicted encoder memory. This avoids using LLaVA explanations at inference time while still testing whether the proxy can provide useful context for the fine-tuned BART decoder.
 
 8. **Evaluate all systems on the held-out validation set.** The evaluation script compares:
    - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/val.jsonl`.
@@ -549,6 +574,48 @@ Latest `evaluation_summary.tsv`:
 | `bart_finetuned_target_only` | 358 | 0.9131 | 0.2419 | 0.2815 | 0.6219 | 0.6523 | 0.0000 | -0.0063 |
 | `bart_finetuned_visual_only` | 358 | 0.9169 | 0.2456 | 0.3252 | 0.6261 | 0.6522 | 0.0000 | -0.0063 |
 | `bart_finetuned_none` | 358 | 0.9178 | 0.2465 | 0.3261 | 0.6256 | 0.6517 | 0.0000 | -0.0058 |
+
+Latest explicit-detox-instruction `evaluation_summary.tsv` (`/scratch/hmr_eval_results_explicit_detox/`, 2026-05-06):
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
+| `bart_base_full` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
+| `bart_base_target_only` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
+| `bart_base_visual_only` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
+| `bart_base_none` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
+| `bart_finetuned_full` | 358 | 0.9255 | 0.2543 | 0.3143 | 0.6247 | 0.6539 | 0.0000 | -0.0079 |
+| `bart_finetuned_target_only` | 358 | 0.9292 | 0.2579 | 0.3084 | 0.6243 | 0.6520 | 0.0028 | -0.0061 |
+| `bart_finetuned_visual_only` | 358 | 0.9256 | 0.2544 | 0.3211 | 0.6258 | 0.6520 | 0.0000 | -0.0060 |
+| `bart_finetuned_none` | 358 | 0.9242 | 0.2529 | 0.3033 | 0.6239 | 0.6537 | 0.0000 | -0.0078 |
+
+Previous single-vector Proxy+BART final-sequence `evaluation_summary.tsv` (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06; superseded by the soft-token proxy implementation):
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
+| `proxy_bart_full` | 358 | 0.9991 | 0.3279 | -0.2292 | 0.5845 | 0.6600 | 0.0000 | -0.0141 |
+
+Soft-token Proxy+BART final-sequence `evaluation_summary.tsv` (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06, `K=16` soft tokens):
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
+| `proxy_bart_full` | 358 | 0.9782 | 0.3069 | -0.3154 | 0.5896 | 0.6601 | 0.0000 | -0.0142 |
+
+Proxy soft tokens + BART `none` prompt encoder states (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06, `K=16` soft tokens):
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
+| `proxy_plus_none_bart_full` | 358 | 0.8084 | 0.1372 | 0.5527 | 0.6312 | 0.6494 | 0.0000 | -0.0035 |
+
+Proxy soft tokens + explicit detox BART prompt encoder states (`/scratch/hmr_eval_results_proxy_proxy_text_explicit/`, 2026-05-06, `K=16` soft tokens):
+
+| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6247 | 0.6531 | 0.0000 | -0.0071 |
+| `proxy_plus_explicit_detox_bart_full` | 358 | 0.7929 | 0.1217 | 0.5536 | 0.6327 | 0.6482 | 0.0000 | -0.0023 |
 
 ### Main Findings
 
@@ -620,6 +687,21 @@ The current plots are stored in:
 ├── phase2_copy_rate_high_curves.png
 ├── phase2_detox_quality_curves.png
 └── all_phases_summary.png
+```
+
+Proxy training curves can be plotted separately with:
+
+```bash
+bash scripts/runai_plot_proxy_curves.sh <UID>
+```
+
+The proxy plots are stored in:
+
+```
+/scratch/hmr_proxy_training_plots/
+├── proxy_loss_curves.png
+├── proxy_generalization_gap.png
+└── proxy_training_summary.png
 ```
 
 The training logs show the expected behavior:

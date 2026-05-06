@@ -1,8 +1,9 @@
 """
 Stage 4: Train the ExplanationProxy network.
 
-Trains a lightweight 3-layer MLP to predict BART's encoder hidden state (h_full)
-from CLIP features, enabling VLM-free deployment (no LLaVA at inference time).
+Trains a lightweight 3-layer MLP to predict a short sequence of BART encoder
+soft tokens from CLIP features, enabling VLM-free deployment (no LLaVA at
+inference time).
 
 Pipeline position: AFTER train_stage2_phase2 (full condition) has completed.
 
@@ -172,6 +173,8 @@ def main():
     parser.add_argument("--num_train_epochs",    type=int,   default=20)
     parser.add_argument("--batch_size",          type=int,   default=64)
     parser.add_argument("--learning_rate",       type=float, default=1e-3)
+    parser.add_argument("--num_soft_tokens",     type=int,   default=16,
+                        help="Number of proxy-predicted BART encoder soft tokens")
     parser.add_argument("--seed",                type=int,   default=42)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -197,6 +200,7 @@ def main():
     print(f"  Epochs:       {args.num_train_epochs}")
     print(f"  Batch size:   {args.batch_size}")
     print(f"  LR:           {args.learning_rate}")
+    print(f"  Soft tokens:  {args.num_soft_tokens}")
     if torch.cuda.is_available():
         print(f"  GPU:          {torch.cuda.get_device_name(0)}")
         print(f"  VRAM:         {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
@@ -251,6 +255,7 @@ def main():
         clip_model_name="openai/clip-vit-large-patch14",
         cache_dir=args.hf_cache,
         device=device,
+        num_soft_tokens=args.num_soft_tokens,
     )
 
     # -----------------------------------------------------------------------
@@ -293,6 +298,17 @@ def main():
     history_path = Path(args.output_dir) / "training_history.json"
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
+
+    proxy_config = {
+        "architecture": "clip_to_bart_soft_encoder_tokens",
+        "num_soft_tokens": args.num_soft_tokens,
+        "bart_hidden_size": rewriter.hidden_size,
+        "clip_model": "openai/clip-vit-large-patch14",
+        "bart_checkpoint_dir": args.bart_checkpoint_dir,
+    }
+    config_path = Path(args.output_dir) / "proxy_config.json"
+    with open(config_path, "w") as f:
+        json.dump(proxy_config, f, indent=2)
 
     logger.info(f"Proxy training complete. Checkpoint saved to {args.output_dir}")
     print(f"\n{'='*60}")

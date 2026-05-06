@@ -103,7 +103,7 @@ def _extract_record(raw: Dict[str, Any], fallback_system: str) -> Optional[Dict[
 
     return {
         "id": raw.get("id") or raw.get("idx"),
-        "system": fallback_system,
+        "system": raw.get("system") or fallback_system,
         "image_path": image_path,
         "original_text": str(original),
         "rewrite": str(rewrite),
@@ -184,7 +184,7 @@ def load_system_records(
                 continue
             rec = _extract_record(raw, system_name)
             if rec is not None:
-                rec["system"] = system_name
+                rec["system"] = rec.get("system") or system_name
                 records.append(rec)
             if max_examples and len(records) >= max_examples:
                 break
@@ -213,6 +213,33 @@ def discover_stage2_systems(
             max_examples,
             id_filter=id_filter,
         )
+    return systems
+
+
+def discover_named_systems(
+    dirs: List[Path],
+    default_name: str,
+    max_examples: Optional[int],
+    id_filter: Optional[set] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    systems: Dict[str, List[Dict[str, Any]]] = {}
+    for output_dir in dirs:
+        jsonl_path = _first_existing_jsonl(output_dir)
+        if jsonl_path is None:
+            logger.warning("No JSONL output found in %s", output_dir)
+            continue
+        system_name = default_name
+        if "proxy_bart_full" in jsonl_path.stem or "proxy" in output_dir.name:
+            system_name = "proxy_plus_none_bart_full"
+        records = load_system_records(
+            jsonl_path,
+            system_name,
+            max_examples,
+            id_filter=id_filter,
+        )
+        if records and records[0].get("system"):
+            system_name = records[0]["system"]
+        systems[system_name] = records
     return systems
 
 
@@ -375,6 +402,13 @@ def main() -> int:
     )
     parser.add_argument("--bart_base_output_dirs", type=Path, nargs="*", default=[])
     parser.add_argument("--bart_finetuned_output_dirs", type=Path, nargs="*", default=[])
+    parser.add_argument(
+        "--proxy_output_dirs",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Optional output dirs from inference/run_proxy_pipeline.py.",
+    )
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--hf_cache", type=str, default=None)
     parser.add_argument("--max_examples", type=int, default=None)
@@ -421,6 +455,12 @@ def main() -> int:
     systems.update(discover_stage2_systems(
         args.bart_finetuned_output_dirs,
         "bart_finetuned",
+        max_examples,
+        id_filter=validation_ids,
+    ))
+    systems.update(discover_named_systems(
+        args.proxy_output_dirs,
+        "proxy_bart_full",
         max_examples,
         id_filter=validation_ids,
     ))

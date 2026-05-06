@@ -5,22 +5,23 @@ set -e
 # Stage 4: Train explanation proxy network (GPU A100-40G)
 #
 # Usage:
-#   bash scripts/runai_train_proxy.sh <UID_NUMBER>   # home code path
-#   bash scripts/runai_train_proxy.sh                # scratch code path
+#   bash scripts/runai_train_proxy.sh <UID_NUMBER>
+#   bash scripts/runai_train_proxy.sh
 #
 # Example:
 #   bash scripts/runai_train_proxy.sh 123456
 #
 # Note: Run this AFTER Stage 2 Phase 2 (full condition) has completed.
-#       Trains a lightweight CLIP→BART-hidden-state MLP to bypass LLaVA at deployment.
+#       Trains a lightweight CLIP→BART soft-token MLP to bypass LLaVA at deployment.
+#       Set PROXY_NUM_SOFT_TOKENS=32 to try a longer proxy encoder memory.
 # =============================================================================
 
 # --- Validate args ---
 if [ "$#" -gt 1 ]; then
     echo "ERROR: Too many arguments."
     echo "Usage:"
-    echo "  bash $0 <UID_NUMBER>   # use /home/\${USER}/hateful_meme_rewriting"
-    echo "  bash $0                # use /scratch/hateful_meme_rewriting"
+    echo "  bash $0 <UID_NUMBER>"
+    echo "  bash $0"
     exit 1
 fi
 
@@ -29,22 +30,33 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
+PROXY_NUM_SOFT_TOKENS="${PROXY_NUM_SOFT_TOKENS:-16}"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
     UID_NUM="$1"
-    CODE_ROOT="/home/${USERNAME}/hateful_meme_rewriting"
-    MODE_LABEL="home"
 else
     UID_NUM="$(id -u)"
+fi
+
+# If this launcher is run from the shared scratch checkout, use the scratch
+# checkout inside the RunAI pod even when UID is provided. The personal home
+# checkout may exist but be stale.
+if [[ "${REPO_ROOT_LOCAL}" == /mnt/course-ee-559/* || "${REPO_ROOT_LOCAL}" == /scratch/* ]]; then
     CODE_ROOT="/scratch/hateful_meme_rewriting"
     MODE_LABEL="scratch"
+else
+    CODE_ROOT="/home/${USERNAME}/hateful_meme_rewriting"
+    MODE_LABEL="home"
 fi
 
 SCRIPT_PATH="${CODE_ROOT}/training/train_proxy.py"
 if [ ! -f "${SCRIPT_PATH}" ]; then
-    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/training/train_proxy.py" ]; then
-        echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
+    if [ -f "${REPO_ROOT_LOCAL}/training/train_proxy.py" ]; then
+        echo "Note: ${SCRIPT_PATH} is not visible on this node."
+        echo "      Using the shared scratch code path inside the RunAI pod: /scratch/hateful_meme_rewriting"
+        CODE_ROOT="/scratch/hateful_meme_rewriting"
+        SCRIPT_PATH="${CODE_ROOT}/training/train_proxy.py"
     else
         echo "ERROR: Script not found at: ${SCRIPT_PATH}"
         echo "Check that the repository exists at ${CODE_ROOT}."
@@ -57,6 +69,7 @@ echo "  User:  ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Group: ${GROUP_NUM}"
+echo "  Soft tokens: ${PROXY_NUM_SOFT_TOKENS}"
 echo "  Image: ${IMAGE}"
 echo ""
 
@@ -80,6 +93,7 @@ runai submit hmr-train-proxy \
         --num_train_epochs 20 \
         --batch_size 64 \
         --learning_rate 1e-3 \
+        --num_soft_tokens ${PROXY_NUM_SOFT_TOKENS} \
         --seed 42
 
 echo "Proxy network training job submitted."

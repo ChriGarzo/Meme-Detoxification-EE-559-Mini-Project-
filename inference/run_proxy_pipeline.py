@@ -1,8 +1,11 @@
 """
-Proxy Pipeline: VLM-free inference using CLIP + ExplanationProxy + BART.
+Proxy + BART inference for VLM-free meme rewriting.
 
-Provides efficient end-to-end inference without LLaVA by using pre-computed
-or learned visual representations through a proxy network.
+This runs the intended deployment-style sequence:
+  image + original text -> CLIP features -> ExplanationProxy soft tokens
+  + BART none-prompt encoder states -> BART full-condition decoder -> rewrite
+
+The JSONL output is intentionally compatible with evaluation/evaluate.py.
 """
 
 import argparse
@@ -12,24 +15,23 @@ import os
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 import torch
 import tqdm
 from codecarbon import EmissionsTracker
 from PIL import Image
-from transformers import CLIPModel, CLIPProcessor, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import BartForConditionalGeneration, BartTokenizer, CLIPModel, CLIPProcessor
+from transformers.modeling_outputs import BaseModelOutput
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from models.rewriter import MemeRewriter
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from models.proxy import ExplanationProxy
 
 logger = logging.getLogger(__name__)
 
 
 def set_seed(seed: int = 42) -> None:
-    """Set all random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -37,386 +39,300 @@ def set_seed(seed: int = 42) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-class ExplanationProxy(torch.nn.Module):
-    """
-    Proxy network that predicts full explanation embedding from CLIP features.
-
-    Maps CLIP visual features to BART encoder hidden states for explanation.
-    """
-
-    def __init__(self, input_dim: int = 512, hidden_dim: int = 256, output_dim: int = 768):
-        super().__init__()
-        self.fc1 = torch.nn.Linear(input_dim, hidden_dim)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, clip_features: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            clip_features: (batch_size, input_dim) CLIP visual features
-
-        Returns:
-            explanation_embedding: (batch_size, output_dim) predicted explanation embedding
-        """
-        x = self.fc1(clip_features)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+def setup_logging(output_dir: Path, debug: bool = False) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(output_dir / "proxy_pipeline.log"),
+            logging.StreamHandler(),
+        ],
+    )
 
 
-class CLIPFeatureExtractor:
-    """Extract visual features from images using CLIP."""
-
-    def __init__(self, model_name: str = "openai/clip-vit-base-patch32", cache_dir: Optional[str] = None):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = CLIPModel.from_pretrained(model_name, cache_dir=cache_dir)
-        self.processor = CLIPProcessor.from_pretrained(model_name, cache_dir=cache_dir)
-        self.model.to(self.device)
-        self.model.eval()
-
-    def extract(self, image_path: str) -> torch.Tensor:
-        """
-        Extract CLIP visual features from an image.
-
-        Args:
-            image_path: Path to image file
-
-        Returns:
-            Visual features (512,) for ViT-B/32
-        """
-        try:
-            image = Image.open(image_path).convert("RGB")
-        except Exception as e:
-            logger.warning(f"Failed to load image {image_path}: {e}")
-            # Return zero tensor if image loading fails
-            return torch.zeros(512, dtype=torch.float32, device=self.device)
-
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
-        return image_features.squeeze(0)
-
-    def extract_batch(self, image_paths: List[str]) -> torch.Tensor:
-        """
-        Extract CLIP features for a batch of images.
-
-        Args:
-            image_paths: List of paths to images
-
-        Returns:
-            Visual features (batch_size, 512)
-        """
-        features_list = []
-        for path in image_paths:
-            features = self.extract(path)
-            features_list.append(features)
-
-        return torch.stack(features_list)
+def load_stage2_jsonl(path: Path, max_examples: Optional[int]) -> List[Dict[str, Any]]:
+    examples: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning("Skipping invalid JSON in %s line %d: %s", path, line_num, exc)
+                continue
+            original_text = row.get("original_text") or row.get("text") or ""
+            image_path = row.get("image_path") or ""
+            if not original_text or not image_path:
+                continue
+            examples.append({
+                "id": row.get("id"),
+                "image_path": image_path,
+                "original_text": original_text,
+                "target_text": row.get("target_text", ""),
+                "target_group": row.get("target_group"),
+                "visual_evidence": row.get("visual_evidence"),
+                "implicit_meaning": row.get("implicit_meaning"),
+                "dataset": row.get("dataset"),
+            })
+            if max_examples and len(examples) >= max_examples:
+                break
+    logger.info("Loaded %d examples from %s", len(examples), path)
+    return examples
 
 
-class ProxyPipeline:
-    """End-to-end inference pipeline using proxy network."""
+def write_jsonl_batch(records: List[Dict[str, Any]], output_path: Path) -> None:
+    with output_path.open("a", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+class ProxyBartPipeline:
+    """Inference wrapper for proxy soft tokens plus BART text encoder states."""
 
     def __init__(
         self,
-        clip_model_name: str = "openai/clip-vit-base-patch32",
-        proxy_checkpoint: Optional[str] = None,
-        bart_model_name: str = "facebook/bart-base",
-        proxy_hidden_dim: int = 256,
-        cache_dir: Optional[str] = None,
-        device: str = "cuda"
-    ):
+        bart_checkpoint: str,
+        proxy_checkpoint: str,
+        clip_model_name: str,
+        hf_cache: Optional[str],
+        device: str,
+        num_soft_tokens: Optional[int] = None,
+        text_prompt_format: str = "none_legacy",
+    ) -> None:
         self.device = device
-        self.cache_dir = cache_dir
+        self.text_prompt_format = text_prompt_format
 
-        # Load CLIP
-        logger.info(f"Loading CLIP from {clip_model_name}")
-        self.clip_extractor = CLIPFeatureExtractor(clip_model_name, cache_dir)
+        logger.info("Loading CLIP model: %s", clip_model_name)
+        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name, cache_dir=hf_cache)
+        self.clip_model = CLIPModel.from_pretrained(clip_model_name, cache_dir=hf_cache).to(device)
+        self.clip_model.eval()
 
-        # Load proxy network
-        logger.info(f"Loading ExplanationProxy (hidden_dim={proxy_hidden_dim})")
-        self.proxy = ExplanationProxy(input_dim=512, hidden_dim=proxy_hidden_dim, output_dim=768)
+        logger.info("Loading BART checkpoint: %s", bart_checkpoint)
+        self.tokenizer = BartTokenizer.from_pretrained(bart_checkpoint, cache_dir=hf_cache)
+        self.bart = BartForConditionalGeneration.from_pretrained(bart_checkpoint, cache_dir=hf_cache).to(device)
+        self.bart.eval()
 
-        if proxy_checkpoint and os.path.exists(proxy_checkpoint):
-            logger.info(f"Loading proxy weights from {proxy_checkpoint}")
-            state = torch.load(proxy_checkpoint, map_location=device)
-            self.proxy.load_state_dict(state)
-        else:
-            logger.warning(f"Proxy checkpoint not found: {proxy_checkpoint}, using random initialization")
-
-        self.proxy.to(device)
+        hidden_size = int(self.bart.config.d_model)
+        proxy_config_path = Path(proxy_checkpoint).parent / "proxy_config.json"
+        if num_soft_tokens is None and proxy_config_path.exists():
+            try:
+                with proxy_config_path.open("r", encoding="utf-8") as f:
+                    num_soft_tokens = int(json.load(f).get("num_soft_tokens", 16))
+            except Exception as exc:
+                logger.warning("Could not read %s: %s", proxy_config_path, exc)
+        num_soft_tokens = num_soft_tokens or 16
+        logger.info("Loading proxy checkpoint: %s", proxy_checkpoint)
+        logger.info("Proxy soft tokens: %d", num_soft_tokens)
+        self.proxy = ExplanationProxy(
+            bart_hidden_size=hidden_size,
+            num_soft_tokens=num_soft_tokens,
+        ).to(device)
+        state_dict = torch.load(proxy_checkpoint, map_location=device)
+        self.proxy.load_state_dict(state_dict)
         self.proxy.eval()
 
-        # Load BART (decoder only, using encoder from proxy)
-        logger.info(f"Loading BART from {bart_model_name}")
-        self.bart_model = AutoModelForSeq2SeqLM.from_pretrained(bart_model_name, cache_dir=cache_dir)
-        self.bart_tokenizer = AutoTokenizer.from_pretrained(bart_model_name, cache_dir=cache_dir)
-        self.bart_model.to(device)
-        self.bart_model.eval()
+    def _build_text_prompts(self, texts: List[str]) -> List[str]:
+        if self.text_prompt_format == "none_explicit_detox":
+            return [
+                "Task: rewrite the original meme text to be non-toxic while preserving "
+                "the meme topic and intended meaning. "
+                "Context: target group = null; visual evidence = null; "
+                "implicit harmful meaning = null. "
+                f"Original meme text to detoxify: {text}"
+                for text in texts
+            ]
+        return [f"[T: null] [V: null] [M: null] | {text}" for text in texts]
 
-    def rewrite(
-        self,
-        image_path: str,
-        original_text: str,
-        max_length: int = 128,
-        num_beams: int = 5
-    ) -> str:
-        """
-        Generate rewrite for a single example.
-
-        Args:
-            image_path: Path to meme image
-            original_text: Original hateful text
-            max_length: Maximum length of generated text
-            num_beams: Number of beams for beam search
-
-        Returns:
-            Rewritten text
-        """
-        # Extract CLIP features
-        image_features = self.clip_extractor.extract(image_path)  # (512,)
-
-        # Predict encoder hidden state via proxy
+    def _encode_text_prompts(self, texts: List[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        prompts = self._build_text_prompts(texts)
+        inputs = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            max_length=512,
+            truncation=True,
+            padding=True,
+        ).to(self.device)
+        encoder = self.bart.get_encoder()
         with torch.no_grad():
-            encoder_hidden = self.proxy(image_features.unsqueeze(0))  # (1, 768)
-
-            # Tokenize input text
-            inputs = self.bart_tokenizer(
-                original_text,
-                max_length=512,
-                truncation=True,
-                return_tensors="pt"
+            encoder_outputs = encoder(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                return_dict=True,
             )
-            input_ids = inputs["input_ids"].to(self.device)
+        return encoder_outputs.last_hidden_state, inputs["attention_mask"]
 
-            # Generate with proxy-predicted context
-            outputs = self.bart_model.generate(
-                input_ids,
-                encoder_outputs=(encoder_hidden,),
-                max_length=max_length,
-                num_beams=num_beams,
-                early_stopping=True,
-                no_repeat_ngram_size=2,
-                length_penalty=2.0
-            )
+    def _clip_features(self, image_paths: List[str], texts: List[str]) -> torch.Tensor:
+        images = []
+        for image_path in image_paths:
+            try:
+                with Image.open(image_path) as img:
+                    images.append(img.convert("RGB"))
+            except Exception as exc:
+                logger.warning("Failed to load image %s: %s", image_path, exc)
+                images.append(Image.new("RGB", (224, 224), color=(0, 0, 0)))
 
-            rewrite = self.bart_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        inputs = self.clip_processor(
+            images=images,
+            text=texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77,
+        )
+        inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
-        return rewrite
+        with torch.no_grad():
+            outputs = self.clip_model(**inputs)
+            return torch.cat([outputs.image_embeds, outputs.text_embeds], dim=1).float()
 
     def rewrite_batch(
         self,
         image_paths: List[str],
         texts: List[str],
-        max_length: int = 128,
-        num_beams: int = 5
+        max_length: int,
+        num_beams: int,
+        no_repeat_ngram_size: int,
     ) -> List[str]:
-        """
-        Generate rewrites for a batch of examples.
-
-        Args:
-            image_paths: List of paths to meme images
-            texts: List of original texts
-            max_length: Maximum length of generated text
-            num_beams: Number of beams for beam search
-
-        Returns:
-            List of rewritten texts
-        """
-        assert len(image_paths) == len(texts), "Mismatch between images and texts"
-
-        batch_size = len(image_paths)
-        rewrites = []
-
-        # Extract CLIP features for batch
-        image_features = self.clip_extractor.extract_batch(image_paths)  # (batch_size, 512)
-
-        # Predict encoder hidden states via proxy
+        features = self._clip_features(image_paths, texts)
         with torch.no_grad():
-            encoder_hidden = self.proxy(image_features)  # (batch_size, 768)
-
-            # Tokenize all texts
-            inputs = self.bart_tokenizer(
-                texts,
-                max_length=512,
-                truncation=True,
-                padding=True,
-                return_tensors="pt"
+            proxy_hidden = self.proxy(features)  # [B, num_soft_tokens, hidden_size]
+            text_hidden, text_attention_mask = self._encode_text_prompts(texts)
+            dtype = next(self.bart.parameters()).dtype
+            proxy_hidden = proxy_hidden.to(dtype=dtype)
+            text_hidden = text_hidden.to(dtype=dtype)
+            hidden = torch.cat([proxy_hidden, text_hidden], dim=1)
+            proxy_attention_mask = torch.ones(
+                proxy_hidden.shape[:2],
+                dtype=text_attention_mask.dtype,
+                device=self.device,
             )
-            input_ids = inputs["input_ids"].to(self.device)
-            attention_mask = inputs["attention_mask"].to(self.device)
-
-            # Generate for batch
-            outputs = self.bart_model.generate(
-                input_ids,
+            attention_mask = torch.cat([proxy_attention_mask, text_attention_mask], dim=1)
+            encoder_outputs = BaseModelOutput(last_hidden_state=hidden)
+            output_ids = self.bart.generate(
+                encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
-                encoder_outputs=(encoder_hidden,),
                 max_length=max_length,
                 num_beams=num_beams,
                 early_stopping=True,
-                no_repeat_ngram_size=2,
-                length_penalty=2.0
+                do_sample=False,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
-
-            for output in outputs:
-                rewrite = self.bart_tokenizer.decode(output, skip_special_tokens=True)
-                rewrites.append(rewrite)
-
-        return rewrites
+        return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
 
 
-def load_manifest(manifest_path: str, max_examples: Optional[int] = None) -> pd.DataFrame:
-    """Load manifest CSV with image data."""
-    df = pd.read_csv(manifest_path)
-    if max_examples:
-        df = df.head(max_examples)
-    logger.info(f"Loaded {len(df)} examples from manifest")
-    return df
-
-
-def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
-    """Append batch of examples to JSONL file."""
-    with open(output_path, "a") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Proxy Pipeline: VLM-free meme rewriting")
-    parser.add_argument("--dataset", type=str, required=True, help="Dataset name (e.g., 'training')")
-    parser.add_argument("--images_dir", type=str, required=True, help="Path to images directory")
-    parser.add_argument("--manifest", type=str, required=True, help="Path to manifest CSV")
-    parser.add_argument("--bart_checkpoint", type=str, default="facebook/bart-base", help="BART model or checkpoint")
-    parser.add_argument("--proxy_checkpoint", type=str, default=None, help="Path to trained proxy checkpoint")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
-    parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for inference")
-    parser.add_argument("--num_beams", type=int, default=5, help="Number of beams for beam search")
-    parser.add_argument("--proxy_hidden_dim", type=int, default=256, help="Proxy network hidden dimension")
-    parser.add_argument("--debug", action="store_true", help="Debug mode: process max 16 examples")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run proxy -> BART-full VLM-free rewriting")
+    parser.add_argument("--input_jsonl", type=Path, required=True, help="Stage 2 val/test JSONL")
+    parser.add_argument("--bart_checkpoint", type=str, required=True, help="Full-condition BART checkpoint")
+    parser.add_argument("--proxy_checkpoint", type=str, required=True, help="Trained proxy .pt checkpoint")
+    parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--hf_cache", type=str, default=None)
+    parser.add_argument("--clip_model_name", type=str, default="openai/clip-vit-large-patch14")
+    parser.add_argument("--num_soft_tokens", type=int, default=None)
+    parser.add_argument(
+        "--text_prompt_format",
+        type=str,
+        choices=["none_legacy", "none_explicit_detox"],
+        default="none_legacy",
+        help="Text prompt encoded after proxy tokens.",
+    )
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--num_beams", type=int, default=4)
+    parser.add_argument("--max_length", type=int, default=64)
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=3)
+    parser.add_argument("--max_examples", type=int, default=None)
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    # Setup
+    if args.hf_cache:
+        os.environ["HF_HOME"] = args.hf_cache
     set_seed(args.seed)
-    os.makedirs(args.output_dir, exist_ok=True)
-    os.environ["HF_HOME"] = args.hf_cache
+    setup_logging(args.output_dir, debug=args.debug)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(os.path.join(args.output_dir, "proxy_pipeline.log")),
-            logging.StreamHandler()
-        ]
+    max_examples = args.max_examples
+    if args.debug and max_examples is None:
+        max_examples = 16
+
+    examples = load_stage2_jsonl(args.input_jsonl, max_examples=max_examples)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info("Using device: %s", device)
+    logger.info("Arguments: %s", vars(args))
+
+    pipeline = ProxyBartPipeline(
+        bart_checkpoint=args.bart_checkpoint,
+        proxy_checkpoint=args.proxy_checkpoint,
+        clip_model_name=args.clip_model_name,
+        hf_cache=args.hf_cache,
+        device=device,
+        num_soft_tokens=args.num_soft_tokens,
+        text_prompt_format=args.text_prompt_format,
     )
 
-    logger.info(f"Starting Proxy Pipeline with dataset={args.dataset}, debug={args.debug}")
-    logger.info(f"Arguments: {vars(args)}")
+    output_path = args.output_dir / "stage2_rewrites_proxy_bart_full.jsonl"
+    if output_path.exists():
+        logger.info("Removing existing output before regeneration: %s", output_path)
+        output_path.unlink()
 
-    # Load manifest
-    max_examples = 16 if args.debug else None
-    manifest_df = load_manifest(args.manifest, max_examples)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
-
-    # Determine BART model for debug mode
-    bart_model = "facebook/bart-base" if args.debug else args.bart_checkpoint
-
-    # Initialize pipeline
-    try:
-        pipeline = ProxyPipeline(
-            clip_model_name="openai/clip-vit-base-patch32",
-            proxy_checkpoint=args.proxy_checkpoint,
-            bart_model_name=bart_model,
-            proxy_hidden_dim=args.proxy_hidden_dim,
-            cache_dir=args.hf_cache,
-            device=device
-        )
-    except Exception as e:
-        logger.error(f"Failed to initialize pipeline: {e}")
-        sys.exit(1)
-
-    # Prepare output path
-    output_path = os.path.join(args.output_dir, f"{args.dataset}_proxy_rewrites.jsonl")
-
-    # Process examples
-    batch_image_paths = []
-    batch_texts = []
-    batch_records = []
-    total_processed = 0
-
-    tracker = EmissionsTracker(log_level="warning", output_dir=args.output_dir, output_file="emissions.csv")
+    tracker = EmissionsTracker(log_level="warning", output_dir=str(args.output_dir), output_file="emissions.csv")
     tracker.start()
 
+    total = 0
     try:
-        with tqdm.tqdm(total=len(manifest_df), desc="Generating rewrites") as pbar:
-            for idx, row in manifest_df.iterrows():
-                example_id = row.get("id")
-                image_path = os.path.join(args.images_dir, row.get("image_path"))
-                original_text = row.get("text", "")
+        for start in tqdm.tqdm(range(0, len(examples), args.batch_size), desc="Proxy+BART rewrites"):
+            batch = examples[start:start + args.batch_size]
+            image_paths = [ex["image_path"] for ex in batch]
+            texts = [ex["original_text"] for ex in batch]
+            try:
+                rewrites = pipeline.rewrite_batch(
+                    image_paths=image_paths,
+                    texts=texts,
+                    max_length=args.max_length,
+                    num_beams=args.num_beams,
+                    no_repeat_ngram_size=args.no_repeat_ngram_size,
+                )
+            except Exception as exc:
+                logger.exception("Proxy+BART generation failed for batch starting at %d: %s", start, exc)
+                rewrites = [""] * len(batch)
 
-                batch_image_paths.append(image_path)
-                batch_texts.append(original_text)
-
-                batch_records.append({
-                    "id": example_id,
-                    "image_path": row.get("image_path"),
-                    "original_text": original_text,
-                    "explanation": {},
-                    "condition": "proxy",
-                    "rewrite": ""
+            records = []
+            system_name = (
+                "proxy_plus_explicit_detox_bart_full"
+                if args.text_prompt_format == "none_explicit_detox"
+                else "proxy_plus_none_bart_full"
+            )
+            for ex, rewrite in zip(batch, rewrites):
+                records.append({
+                    "id": ex.get("id"),
+                    "image_path": ex.get("image_path"),
+                    "original_text": ex.get("original_text"),
+                    "target_text": ex.get("target_text", ""),
+                    "rewrite": rewrite,
+                    "condition": system_name,
+                    "system": system_name,
+                    "explanation": {
+                        "target_group": None,
+                        "visual_evidence": "proxy_predicted_from_clip_image_text",
+                        "implicit_meaning": f"proxy_soft_tokens_plus_bart_{args.text_prompt_format}_encoder_states",
+                    },
+                    "dataset": ex.get("dataset"),
                 })
-
-                # Process batch
-                if len(batch_texts) >= args.batch_size or (idx == len(manifest_df) - 1 and batch_texts):
-                    try:
-                        rewrites = pipeline.rewrite_batch(
-                            batch_image_paths,
-                            batch_texts,
-                            max_length=128,
-                            num_beams=args.num_beams
-                        )
-
-                        for i, rewrite in enumerate(rewrites):
-                            batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = rewrite
-
-                    except Exception as e:
-                        logger.error(f"Error generating batch: {e}")
-                        for i in range(len(batch_texts)):
-                            batch_records[len(batch_records) - len(batch_texts) + i]["rewrite"] = ""
-
-                    # Write batch
-                    write_jsonl_batch(batch_records, output_path)
-                    total_processed += len(batch_records)
-                    logger.info(f"Processed batch of {len(batch_records)} examples")
-
-                    batch_image_paths = []
-                    batch_texts = []
-                    batch_records = []
-
-                pbar.update(1)
-
-        logger.info(f"\n=== Proxy Pipeline Summary ===")
-        logger.info(f"Total examples processed: {total_processed}")
-        logger.info(f"Batch size: {args.batch_size}")
-        logger.info(f"Num beams: {args.num_beams}")
-        logger.info(f"Proxy hidden dim: {args.proxy_hidden_dim}")
-        logger.info(f"Output JSONL: {output_path}")
-
+            write_jsonl_batch(records, output_path)
+            total += len(records)
+            logger.info("Processed %d/%d examples", total, len(examples))
     finally:
         emissions = tracker.stop()
         if emissions is not None:
-            logger.info(f"Carbon emissions: {emissions:.6f} kg CO2")
-        else:
-            logger.warning("CO2 emissions could not be measured")
+            logger.info("Carbon emissions: %.6f kg CO2", emissions)
+
+    logger.info("Proxy+BART output JSONL: %s", output_path)
+    logger.info("Total examples processed: %d", total)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

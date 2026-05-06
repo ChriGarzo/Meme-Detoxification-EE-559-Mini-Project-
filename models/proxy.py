@@ -16,23 +16,26 @@ logger = logging.getLogger(__name__)
 
 class ExplanationProxy(nn.Module):
     """
-    Neural network to predict BART encoder hidden states from CLIP embeddings.
+    Neural network to predict a short sequence of BART encoder hidden states
+    from CLIP embeddings.
 
     Input: concatenated CLIP image and text embeddings [B, 1536]
-    Output: predicted BART encoder hidden state [B, bart_hidden_size]
+    Output: predicted soft encoder tokens [B, num_soft_tokens, bart_hidden_size]
     """
 
-    def __init__(self, bart_hidden_size: int = 1024):
+    def __init__(self, bart_hidden_size: int = 1024, num_soft_tokens: int = 16):
         """
         Initialize ExplanationProxy network.
 
         Args:
             bart_hidden_size: Hidden size of the target BART model
                              (1024 for bart-large, 768 for bart-base)
+            num_soft_tokens: Number of proxy-predicted encoder tokens.
         """
         super().__init__()
 
         self.bart_hidden_size = bart_hidden_size
+        self.num_soft_tokens = num_soft_tokens
 
         # Layer 1: Linear + LayerNorm + GELU
         self.layer1 = nn.Linear(1536, 1024)
@@ -44,8 +47,8 @@ class ExplanationProxy(nn.Module):
         self.ln2 = nn.LayerNorm(1024)
         self.act2 = nn.GELU()
 
-        # Layer 3: Linear to output
-        self.layer3 = nn.Linear(1024, bart_hidden_size)
+        # Layer 3: Linear to a short encoder-memory sequence.
+        self.layer3 = nn.Linear(1024, num_soft_tokens * bart_hidden_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -55,7 +58,7 @@ class ExplanationProxy(nn.Module):
             x: Input tensor [B, 1536]
 
         Returns:
-            Output tensor [B, bart_hidden_size]
+            Output tensor [B, num_soft_tokens, bart_hidden_size]
         """
         # Layer 1
         x = self.layer1(x)
@@ -69,6 +72,7 @@ class ExplanationProxy(nn.Module):
 
         # Layer 3
         x = self.layer3(x)
+        x = x.view(x.shape[0], self.num_soft_tokens, self.bart_hidden_size)
 
         return x
 
@@ -82,6 +86,7 @@ class ExplanationProxyTrainer:
         clip_model_name: str = "openai/clip-vit-large-patch14",
         cache_dir: Optional[str] = None,
         device: Optional[str] = None,
+        num_soft_tokens: int = 16,
     ):
         """
         Initialize ExplanationProxyTrainer.
@@ -95,6 +100,7 @@ class ExplanationProxyTrainer:
         self.clip_model_name = clip_model_name
         self.cache_dir = cache_dir
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.num_soft_tokens = num_soft_tokens
 
         # Load CLIP (must use clip-vit-large-patch14: 768-dim embeds → 1536 concat)
         logger.info(f"Loading CLIP model {clip_model_name}...")
@@ -109,11 +115,13 @@ class ExplanationProxyTrainer:
         # Initialize proxy network
         bart_hidden_size = rewriter.hidden_size or 1024
         self.proxy = ExplanationProxy(
-            bart_hidden_size=bart_hidden_size
+            bart_hidden_size=bart_hidden_size,
+            num_soft_tokens=num_soft_tokens,
         ).to(self.device)
 
         logger.info(
-            f"ExplanationProxyTrainer initialized on device: {self.device}"
+            f"ExplanationProxyTrainer initialized on device: {self.device} "
+            f"with {num_soft_tokens} soft tokens"
         )
 
     def extract_clip_features(
@@ -182,6 +190,23 @@ class ExplanationProxyTrainer:
 
         return torch.cat(all_features, dim=0)
 
+    def _pool_encoder_sequence(self, hidden: torch.Tensor) -> torch.Tensor:
+        """
+        Compress a variable-length BART encoder sequence to fixed K soft tokens.
+
+        Args:
+            hidden: [1, seq_len, hidden_size]
+
+        Returns:
+            [1, num_soft_tokens, hidden_size]
+        """
+        # Adaptive average pooling expects [B, C, T].
+        pooled = torch.nn.functional.adaptive_avg_pool1d(
+            hidden.transpose(1, 2),
+            self.num_soft_tokens,
+        ).transpose(1, 2)
+        return pooled
+
     def extract_bart_targets(
         self,
         texts: List[str],
@@ -199,28 +224,43 @@ class ExplanationProxyTrainer:
             implicit_meanings: List of implicit meanings
 
         Returns:
-            Tensor of shape [N, bart_hidden_size] with encoder hidden states
+            Tensor of shape [N, num_soft_tokens, bart_hidden_size] with encoder-memory targets.
         """
         if self.rewriter.model is None:
             self.rewriter.load_model()
 
-        hidden_states = []
+        target_sequences = []
 
         for text, tg, ve, im in zip(
             texts, target_groups, visual_evidences, implicit_meanings
         ):
-            h = self.rewriter.get_encoder_hidden_state(
+            formatted_input = self.rewriter.format_input(
                 text,
                 target_group=tg,
                 visual_evidence=ve,
                 implicit_meaning=im,
                 mode="full",
             )
-            hidden_states.append(h)
+            inputs = self.rewriter.tokenizer(
+                formatted_input,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+            ).to(self.device)
 
-        # Stack along batch dimension: [N, 1, hidden_size] -> [N, hidden_size]
-        # and normalize to float32 on CPU for stable MSE training.
-        targets = torch.cat(hidden_states, dim=0).detach().float().cpu()
+            with torch.no_grad():
+                encoder = self.rewriter.model.get_encoder()
+                encoder_outputs = encoder(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    return_dict=True,
+                )
+                target_sequences.append(
+                    self._pool_encoder_sequence(encoder_outputs.last_hidden_state)
+                )
+
+        # Stack along batch dimension and normalize to float32 on CPU for stable MSE training.
+        targets = torch.cat(target_sequences, dim=0).detach().float().cpu()
 
         return targets
 
@@ -306,6 +346,7 @@ class ExplanationProxyTrainer:
         history = {
             "train_loss": [],
             "val_loss": [],
+            "num_soft_tokens": self.num_soft_tokens,
         }
         best_val_loss = float("inf")
 
@@ -403,6 +444,7 @@ class ExplanationProxyTrainer:
             "num_samples": len(texts),
             "model_name": self.rewriter.model_name,
             "clip_model": self.clip_model_name,
+            "num_soft_tokens": self.num_soft_tokens,
         }
 
         logger.info(f"Evaluation results: {results}")
