@@ -219,6 +219,8 @@ def format_input(
     visual_evidence: str,
     implicit_meaning: str,
     condition: str,
+    input_format: str = "legacy",
+    task_prefix: str = "",
 ) -> str:
     """Build BART encoder input string for the given condition."""
     tg = target_group    or "null"
@@ -234,7 +236,21 @@ def format_input(
     else:  # "none"
         prefix = "[T: null] [V: null] [M: null]"
 
-    return f"{prefix} | {original_text}"
+    if input_format == "explicit_detox":
+        formatted = (
+            "Task: rewrite the original meme text to be non-toxic while preserving "
+            "the meme topic and intended meaning. "
+            f"Context: target group = {tg}; visual evidence = {ve}; "
+            f"implicit harmful meaning = {im}. "
+            f"Original meme text to detoxify: {original_text}"
+        )
+    else:
+        formatted = f"{prefix} | {original_text}"
+
+    task_prefix = (task_prefix or "").strip()
+    if task_prefix:
+        return f"{task_prefix} {formatted}"
+    return formatted
 
 
 def _normalize_for_compare(text: str) -> str:
@@ -257,10 +273,13 @@ class MemeRewriteDataset(Dataset):
     """Meme pseudo-rewrite pairs with condition-specific BART encoder inputs."""
 
     def __init__(self, examples: List[Dict], tokenizer, condition: str,
+                 input_format: str = "legacy", task_prefix: str = "",
                  max_input_length: int = 128, max_target_length: int = 128):
         self.examples = examples
         self.tokenizer = tokenizer
         self.condition = condition
+        self.input_format = input_format
+        self.task_prefix = task_prefix
         self.max_input_length = max_input_length
         self.max_target_length = max_target_length
         try:
@@ -281,6 +300,8 @@ class MemeRewriteDataset(Dataset):
             visual_evidence=ex.get("visual_evidence"),
             implicit_meaning=ex.get("implicit_meaning"),
             condition=self.condition,
+            input_format=self.input_format,
+            task_prefix=self.task_prefix,
         )
         target_text = ex.get("target_text", "")
 
@@ -385,6 +406,17 @@ def main():
     parser.add_argument("--stage1_output_dir", type=str, default=None,
                         help="Stage 1 output dir for image_path lookup (fallback if dataset "
                              "was built before image_path was added to build_stage2_dataset.py)")
+    parser.add_argument("--input_format",
+                        type=str,
+                        default="legacy",
+                        choices=["legacy", "explicit_detox"],
+                        help=(
+                            "Encoder input format. legacy keeps the original bracket prompt; "
+                            "explicit_detox uses labeled context plus an explicit original text "
+                            "detoxification instruction."
+                        ))
+    parser.add_argument("--task_prefix", type=str, default="",
+                        help="Optional prefix prepended to the encoder input after formatting.")
     # Training hyperparameters
     parser.add_argument("--num_train_epochs",            type=int,   default=5)
     parser.add_argument("--per_device_train_batch_size", type=int,   default=8)
@@ -437,6 +469,9 @@ def main():
     print(f"  Stage 2 Phase 2: BART LoRA Meme Fine-tuning")
     print(f"  Condition:  {args.condition}")
     print(f"  Checkpoint: {checkpoint}")
+    print(f"  Input fmt:  {args.input_format}")
+    if args.task_prefix.strip():
+        print(f"  Task prefix:{args.task_prefix.strip()}")
     print(f"  Epochs:     {num_epochs}")
     print(f"  Batch size: {train_batch}")
     print(f"  LR:         {args.learning_rate}")
@@ -531,8 +566,20 @@ def main():
     # -----------------------------------------------------------------------
     train_examples, val_examples = load_dataset(args.dataset_dir, debug)
 
-    train_dataset = MemeRewriteDataset(train_examples, tokenizer, args.condition)
-    val_dataset   = MemeRewriteDataset(val_examples,   tokenizer, args.condition)
+    train_dataset = MemeRewriteDataset(
+        train_examples,
+        tokenizer,
+        args.condition,
+        input_format=args.input_format,
+        task_prefix=args.task_prefix,
+    )
+    val_dataset = MemeRewriteDataset(
+        val_examples,
+        tokenizer,
+        args.condition,
+        input_format=args.input_format,
+        task_prefix=args.task_prefix,
+    )
     data_collator = DataCollatorForSeq2Seq(tokenizer, model=model, label_pad_token_id=-100)
 
     # -----------------------------------------------------------------------
@@ -992,6 +1039,8 @@ def main():
         visual_evidence=_sample.get("visual_evidence"),
         implicit_meaning=_sample.get("implicit_meaning"),
         condition=args.condition,
+        input_format=args.input_format,
+        task_prefix=args.task_prefix,
     )
     _enc = tokenizer(_input_str, return_tensors="pt", truncation=True, max_length=128)
     _dev = next(model.parameters()).device
@@ -1115,6 +1164,8 @@ def main():
             "phase1_checkpoint":    args.phase1_checkpoint_dir,
             "base_model":           checkpoint,
             "condition":            args.condition,
+            "input_format":          args.input_format,
+            "task_prefix":           args.task_prefix,
             "num_epochs":           num_epochs,
             "batch_size":           train_batch,
             "learning_rate":        args.learning_rate,

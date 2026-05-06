@@ -17,6 +17,11 @@ set -e
 #
 # Example:
 #   bash scripts/runai_plot_curves.sh 123456
+#
+# Optional experiment switches:
+#   CHECKPOINT_SUFFIX=_explicit_detox PLOT_SUFFIX=_explicit_detox bash scripts/runai_plot_curves.sh <UID>
+#     reads /scratch/hmr_stage2_phase2_<condition>_explicit_detox_checkpoint
+#     writes /scratch/hmr_training_plots_explicit_detox
 # =============================================================================
 
 if [ "$#" -gt 1 ]; then
@@ -31,6 +36,10 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
+PLOT_SUFFIX="${PLOT_SUFFIX:-}"
+JOB_SUFFIX="${PLOT_SUFFIX//_/-}"
+PLOT_DIR="/scratch/hmr_training_plots${PLOT_SUFFIX}"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -59,10 +68,12 @@ echo "  User:  ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Image: ${IMAGE}"
-echo "  Output: /scratch/hmr_training_plots"
+echo "  Ckpt suffix: ${CHECKPOINT_SUFFIX}"
+echo "  Plot suffix: ${PLOT_SUFFIX}"
+echo "  Output: ${PLOT_DIR}"
 echo ""
 
-runai submit hmr-plot-curves \
+runai submit hmr-plot-curves${JOB_SUFFIX} \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
     --node-pools cpu \
@@ -76,16 +87,17 @@ runai submit hmr-plot-curves \
         pip install matplotlib --quiet --break-system-packages 2>/dev/null || true
         python3 ${SCRIPT_PATH} \
             --scratch_root /scratch \
-            --output_dir   /scratch/hmr_training_plots
+            --checkpoint_suffix=\"${CHECKPOINT_SUFFIX}\" \
+            --output_dir   ${PLOT_DIR}
     "
 
 echo ""
 echo "Job submitted.  Watch progress with:"
-echo "  runai logs hmr-plot-curves --follow"
+echo "  runai logs hmr-plot-curves${JOB_SUFFIX} --follow"
 echo ""
 echo "Once done, copy plots to your local machine with:"
 echo "  # From a NEW terminal on your laptop (not inside the cluster):"
-echo "  kubectl cp <POD_NAME>:/scratch/hmr_training_plots ./hmr_training_plots"
+echo "  kubectl cp <POD_NAME>:${PLOT_DIR} ./hmr_training_plots${PLOT_SUFFIX}"
 echo ""
 echo "Or submit a second job to list the generated files:"
 echo "  runai submit hmr-list-plots \\"
@@ -93,4 +105,4 @@ echo "      --run-as-uid ${UID_NUM} \\"
 echo "      --image ${IMAGE} \\"
 echo "      --cpu 1 --memory 1Gi \\"
 echo "      --existing-pvc claimname=course-ee-559-scratch-g31,path=/scratch \\"
-echo "      --command -- bash -c 'ls -lh /scratch/hmr_training_plots/'"
+echo "      --command -- bash -c 'ls -lh ${PLOT_DIR}/'"

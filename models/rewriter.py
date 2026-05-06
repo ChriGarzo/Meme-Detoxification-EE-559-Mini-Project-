@@ -92,6 +92,8 @@ class MemeRewriter:
         visual_evidence: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
         mode: Literal["full", "target_only", "visual_only", "none"] = "full",
+        input_format: Literal["legacy", "explicit_detox"] = "legacy",
+        task_prefix: str = "",
     ) -> str:
         """
         Format input text with explanation prefix tokens.
@@ -127,7 +129,21 @@ class MemeRewriter:
             ve = "null"
             im = "null"
 
-        return f"[T: {tg}] [V: {ve}] [M: {im}] | {text}"
+        if input_format == "explicit_detox":
+            formatted = (
+                "Task: rewrite the original meme text to be non-toxic while preserving "
+                "the meme topic and intended meaning. "
+                f"Context: target group = {tg}; visual evidence = {ve}; "
+                f"implicit harmful meaning = {im}. "
+                f"Original meme text to detoxify: {text}"
+            )
+        else:
+            formatted = f"[T: {tg}] [V: {ve}] [M: {im}] | {text}"
+
+        task_prefix = (task_prefix or "").strip()
+        if task_prefix:
+            return f"{task_prefix} {formatted}"
+        return formatted
 
     def rewrite(
         self,
@@ -136,6 +152,8 @@ class MemeRewriter:
         visual_evidence: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
         mode: Literal["full", "target_only", "visual_only", "none"] = "full",
+        input_format: Literal["legacy", "explicit_detox"] = "legacy",
+        task_prefix: str = "",
         max_length: int = 150,
     ) -> str:
         """
@@ -161,6 +179,8 @@ class MemeRewriter:
             visual_evidence=visual_evidence,
             implicit_meaning=implicit_meaning,
             mode=mode,
+            input_format=input_format,
+            task_prefix=task_prefix,
         )
 
         inputs = self.tokenizer(
@@ -194,6 +214,8 @@ class MemeRewriter:
         visual_evidences: Optional[List[Optional[str]]] = None,
         implicit_meanings: Optional[List[Optional[str]]] = None,
         mode: Literal["full", "target_only", "visual_only", "none"] = "full",
+        input_format: Literal["legacy", "explicit_detox"] = "legacy",
+        task_prefix: str = "",
         max_length: int = 150,
     ) -> List[str]:
         """
@@ -229,6 +251,8 @@ class MemeRewriter:
                     visual_evidence=ve,
                     implicit_meaning=im,
                     mode=mode,
+                    input_format=input_format,
+                    task_prefix=task_prefix,
                     max_length=max_length,
                 )
                 results.append(rewritten)
@@ -245,6 +269,8 @@ class MemeRewriter:
         visual_evidence: Optional[str] = None,
         implicit_meaning: Optional[str] = None,
         mode: Literal["full", "target_only", "visual_only", "none"] = "full",
+        input_format: Literal["legacy", "explicit_detox"] = "legacy",
+        task_prefix: str = "",
     ) -> torch.Tensor:
         """
         Extract mean-pooled encoder hidden state from BART.
@@ -268,6 +294,8 @@ class MemeRewriter:
             visual_evidence=visual_evidence,
             implicit_meaning=implicit_meaning,
             mode=mode,
+            input_format=input_format,
+            task_prefix=task_prefix,
         )
 
         inputs = self.tokenizer(

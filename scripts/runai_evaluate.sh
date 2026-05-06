@@ -35,6 +35,11 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
+INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
+TASK_PREFIX="${TASK_PREFIX:-}"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
+EVAL_SUFFIX="${EVAL_SUFFIX:-}"
+JOB_SUFFIX="${EVAL_SUFFIX//_/-}"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -74,10 +79,13 @@ echo "  User:  ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Group: ${GROUP_NUM}"
+echo "  Input: ${INPUT_FORMAT}"
+echo "  Ckpt suffix: ${CHECKPOINT_SUFFIX}"
+echo "  Eval suffix: ${EVAL_SUFFIX}"
 echo "  Image: ${IMAGE}"
 echo ""
 
-runai submit hmr-evaluate \
+runai submit hmr-evaluate${JOB_SUFFIX} \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
     --node-pools a100-40g \
@@ -88,10 +96,15 @@ runai submit hmr-evaluate \
     --existing-pvc claimname=course-ee-559-scratch-g${GROUP_NUM},path=/scratch \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
     --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
-    --command -- bash "${JOB_SCRIPT}" "${CODE_ROOT}"
+    --command -- env \
+        INPUT_FORMAT="${INPUT_FORMAT}" \
+        TASK_PREFIX="${TASK_PREFIX}" \
+        CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX}" \
+        EVAL_SUFFIX="${EVAL_SUFFIX}" \
+        bash "${JOB_SCRIPT}" "${CODE_ROOT}"
 
 echo "Full evaluation job submitted."
 echo "Watch logs with:"
-echo "  runai logs hmr-evaluate --follow"
+echo "  runai logs hmr-evaluate${JOB_SUFFIX} --follow"
 echo "When complete, outputs should be under:"
-echo "  /scratch/hmr_eval_results"
+echo "  /scratch/hmr_eval_results${EVAL_SUFFIX}"

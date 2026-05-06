@@ -419,6 +419,12 @@ def main():
     parser = argparse.ArgumentParser(description="Recover training metrics from existing checkpoints")
     parser.add_argument("--scratch_root",   type=str, default=None,
                         help="Auto-discover all known checkpoint dirs under this root")
+    parser.add_argument("--checkpoint_suffix", type=str, default="",
+                        help=(
+                            "Optional suffix inserted before _checkpoint when auto-discovering "
+                            "phase2 dirs, e.g. _explicit_detox for "
+                            "hmr_stage2_phase2_full_explicit_detox_checkpoint"
+                        ))
     parser.add_argument("--checkpoint_dir", type=str, default=None,
                         help="Single checkpoint directory to recover")
     parser.add_argument("--phase",      type=str, default=None, choices=["phase1", "phase2"],
@@ -453,6 +459,8 @@ def main():
         root = Path(args.scratch_root)
         print(f"\nAuto-discovering checkpoints under {root} ...")
         for dir_name, (phase, condition) in KNOWN_DIRS.items():
+            if phase == "phase2" and args.checkpoint_suffix:
+                dir_name = dir_name.replace("_checkpoint", f"{args.checkpoint_suffix}_checkpoint")
             cdir = root / dir_name
             if not cdir.exists():
                 print(f"  [SKIP] {dir_name} — not found")

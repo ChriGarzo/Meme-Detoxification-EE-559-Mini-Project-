@@ -28,6 +28,10 @@ set -e
 #       projections (q/k/v/out_proj) and FFN layers (fc1, fc2) in both
 #       encoder and decoder (~17M trainable / 400M total, ~4.3%).
 #       No ParaDetox mixing — meme dataset only.
+#
+# Optional experiment switches:
+#   INPUT_FORMAT=explicit_detox OUTPUT_SUFFIX=_explicit_detox bash scripts/runai_stage2_phase2.sh <UID>
+#     writes checkpoints like /scratch/hmr_stage2_phase2_full_explicit_detox_checkpoint
 # =============================================================================
 
 # --- Validate args ---
@@ -71,6 +75,14 @@ fi
 
 # Ablation conditions (must match MemeRewriter.format_input and run_stage2.py)
 CONDITIONS=("full" "target_only" "visual_only" "none")
+INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
+TASK_PREFIX="${TASK_PREFIX:-}"
+OUTPUT_SUFFIX="${OUTPUT_SUFFIX:-}"
+JOB_SUFFIX="${OUTPUT_SUFFIX//_/-}"
+TASK_PREFIX_ARGS=()
+if [ -n "${TASK_PREFIX}" ]; then
+    TASK_PREFIX_ARGS=(--task_prefix "${TASK_PREFIX}")
+fi
 
 echo "=== Stage 2: BART LoRA Meme Fine-tune (meme dataset only, no ParaDetox) ==="
 echo "  User:       ${USERNAME} (UID: ${UID_NUM})"
@@ -78,6 +90,8 @@ echo "  Mode:       ${MODE_LABEL}"
 echo "  Code root:  ${CODE_ROOT}"
 echo "  Group:      ${GROUP_NUM}"
 echo "  Conditions: ${CONDITIONS[*]}"
+echo "  Input fmt:  ${INPUT_FORMAT}"
+echo "  Output suff:${OUTPUT_SUFFIX}"
 echo "  Image:      ${IMAGE}"
 echo ""
 
@@ -85,7 +99,7 @@ for CONDITION in "${CONDITIONS[@]}"; do
     SAFE_CONDITION="${CONDITION//_/-}"
     echo "Submitting Stage 2 for condition: ${CONDITION}"
 
-    runai submit hmr-stage2-phase2-${SAFE_CONDITION} \
+    runai submit hmr-stage2-phase2-${SAFE_CONDITION}${JOB_SUFFIX} \
         --run-as-uid ${UID_NUM} \
         --image ${IMAGE} \
         --node-pools a100-40g \
@@ -99,9 +113,11 @@ for CONDITION in "${CONDITIONS[@]}"; do
         --command -- python3 ${TRAIN_SCRIPT} \
             --condition ${CONDITION} \
             --dataset_dir /scratch/hmr_stage2_dataset \
-            --output_dir /scratch/hmr_stage2_phase2_${CONDITION}_checkpoint \
+            --output_dir /scratch/hmr_stage2_phase2_${CONDITION}${OUTPUT_SUFFIX}_checkpoint \
             --hf_cache /scratch/hf_cache \
             --stage1_output_dir /scratch/hmr_stage1_output \
+            --input_format ${INPUT_FORMAT} \
+            "${TASK_PREFIX_ARGS[@]}" \
             --num_train_epochs 5 \
             --per_device_train_batch_size 8 \
             --learning_rate 1e-4 \

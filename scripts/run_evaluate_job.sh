@@ -10,6 +10,14 @@ HF_CACHE="${HF_CACHE:-/scratch/hf_cache}"
 STAGE1_DIR="${STAGE1_DIR:-/scratch/hmr_stage1_output}"
 VALIDATION_JSONL="${VALIDATION_JSONL:-/scratch/hmr_stage2_dataset/val.jsonl}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch}"
+INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
+TASK_PREFIX="${TASK_PREFIX:-}"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
+EVAL_SUFFIX="${EVAL_SUFFIX:-}"
+TASK_PREFIX_ARGS=()
+if [ -n "${TASK_PREFIX}" ]; then
+    TASK_PREFIX_ARGS=(--task_prefix "${TASK_PREFIX}")
+fi
 
 cd "${CODE_ROOT}"
 
@@ -18,7 +26,10 @@ echo "Code root: ${CODE_ROOT}"
 echo "HF cache:  ${HF_CACHE}"
 echo "Stage 1:   ${STAGE1_DIR}"
 echo "Val JSONL: ${VALIDATION_JSONL}"
-echo "Output:    ${OUTPUT_ROOT}/hmr_eval_results"
+echo "Input fmt: ${INPUT_FORMAT}"
+echo "Eval suff: ${EVAL_SUFFIX}"
+echo "Ckpt suff: ${CHECKPOINT_SUFFIX}"
+echo "Output:    ${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
 echo ""
 
 VAL_COUNT="$(wc -l < "${VALIDATION_JSONL}")"
@@ -49,6 +60,8 @@ run_stage2_if_needed() {
         --input_jsonl "${VALIDATION_JSONL}" \
         --output_dir "${output_dir}" \
         --hf_cache "${HF_CACHE}" \
+        --input_format "${INPUT_FORMAT}" \
+        "${TASK_PREFIX_ARGS[@]}" \
         --batch_size 4
 }
 
@@ -58,7 +71,7 @@ for COND in full target_only visual_only none; do
     run_stage2_if_needed \
         "${COND}" \
         "facebook/bart-large" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_${COND}"
+        "${OUTPUT_ROOT}/hmr_eval_bart_base_${COND}${EVAL_SUFFIX}"
 done
 
 echo "=== Finetuned BART inference: all 4 conditions ==="
@@ -66,24 +79,24 @@ for COND in full target_only visual_only none; do
     echo "--- Finetuned BART condition: ${COND} ---"
     run_stage2_if_needed \
         "${COND}" \
-        "${OUTPUT_ROOT}/hmr_stage2_phase2_${COND}_checkpoint" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_${COND}"
+        "${OUTPUT_ROOT}/hmr_stage2_phase2_${COND}${CHECKPOINT_SUFFIX}_checkpoint" \
+        "${OUTPUT_ROOT}/hmr_eval_stage2_${COND}${EVAL_SUFFIX}"
 done
 
 echo "=== Final evaluation: LLaVA teacher vs base BART vs finetuned BART ==="
 python3 "${CODE_ROOT}/evaluation/evaluate.py" \
     --validation_jsonl "${VALIDATION_JSONL}" \
     --bart_base_output_dirs \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_full" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_target_only" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_visual_only" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_none" \
+        "${OUTPUT_ROOT}/hmr_eval_bart_base_full${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_bart_base_target_only${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_bart_base_visual_only${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_bart_base_none${EVAL_SUFFIX}" \
     --bart_finetuned_output_dirs \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_full" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_target_only" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_visual_only" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_none" \
-    --output_dir "${OUTPUT_ROOT}/hmr_eval_results" \
+        "${OUTPUT_ROOT}/hmr_eval_stage2_full${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_stage2_target_only${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_stage2_visual_only${EVAL_SUFFIX}" \
+        "${OUTPUT_ROOT}/hmr_eval_stage2_none${EVAL_SUFFIX}" \
+    --output_dir "${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}" \
     --hf_cache "${HF_CACHE}"
 
 echo "=== Stage 3 evaluation complete ==="

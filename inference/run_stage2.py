@@ -127,7 +127,9 @@ def discover_explanation_files(stage1_dir: Path) -> List[Path]:
 def build_condition_prompt(
     original_text: str,
     explanation: Dict[str, str],
-    condition: str
+    condition: str,
+    input_format: str = "legacy",
+    task_prefix: str = "",
 ) -> str:
     """
     Build BART encoder input string based on ablation condition.
@@ -153,7 +155,22 @@ def build_condition_prompt(
         prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # 'none'
         prefix = "[T: null] [V: null] [M: null]"
-    return f"{prefix} | {original_text}"
+
+    if input_format == "explicit_detox":
+        formatted = (
+            "Task: rewrite the original meme text to be non-toxic while preserving "
+            "the meme topic and intended meaning. "
+            f"Context: target group = {tg}; visual evidence = {ve}; "
+            f"implicit harmful meaning = {im}. "
+            f"Original meme text to detoxify: {original_text}"
+        )
+    else:
+        formatted = f"{prefix} | {original_text}"
+
+    task_prefix = (task_prefix or "").strip()
+    if task_prefix:
+        return f"{task_prefix} {formatted}"
+    return formatted
 
 
 def main():
@@ -183,6 +200,18 @@ def main():
         default="full",
         help="Ablation conditioning strategy (full | target_only | visual_only | none)"
     )
+    parser.add_argument(
+        "--input_format",
+        type=str,
+        default="legacy",
+        choices=["legacy", "explicit_detox"],
+        help=(
+            "Encoder input format. legacy keeps the original bracket prompt; "
+            "explicit_detox uses labeled context plus an explicit original text "
+            "detoxification instruction."
+        ),
+    )
+    parser.add_argument("--task_prefix", type=str, default="", help="Optional prefix prepended to the encoder input.")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for JSONL")
     parser.add_argument("--hf_cache", type=str, default="./hf_cache", help="Hugging Face cache directory")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for inference")
@@ -305,7 +334,13 @@ def main():
                 explanation = example.get("explanation", {})
 
                 # Build conditioning prompt
-                prompt = build_condition_prompt(original_text, explanation, args.condition)
+                prompt = build_condition_prompt(
+                    original_text,
+                    explanation,
+                    args.condition,
+                    input_format=args.input_format,
+                    task_prefix=args.task_prefix,
+                )
                 batch_texts.append(prompt)
                 batch_prompts.append(prompt)
                 batch_original.append(original_text)
