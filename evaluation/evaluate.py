@@ -409,6 +409,12 @@ def main() -> int:
         default=[],
         help="Optional output dirs from inference/run_proxy_pipeline.py.",
     )
+    parser.add_argument(
+        "--detoxllm_output_path",
+        type=Path,
+        default=None,
+        help="Optional JSONL output from baselines/run_detoxllm_baseline.py.",
+    )
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--hf_cache", type=str, default=None)
     parser.add_argument("--max_examples", type=int, default=None)
@@ -464,6 +470,18 @@ def main() -> int:
         max_examples,
         id_filter=validation_ids,
     ))
+
+    if args.detoxllm_output_path is not None:
+        detoxllm_jsonl = _first_existing_jsonl(args.detoxllm_output_path)
+        if detoxllm_jsonl is not None:
+            systems["detoxllm"] = load_system_records(
+                detoxllm_jsonl,
+                "detoxllm",
+                max_examples,
+                id_filter=validation_ids,
+            )
+        else:
+            logger.warning("No JSONL found at --detoxllm_output_path: %s", args.detoxllm_output_path)
 
     if not systems:
         logger.error("No systems were loaded.")

@@ -14,6 +14,7 @@ INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
 TASK_PREFIX="${TASK_PREFIX:-}"
 CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
 EVAL_SUFFIX="${EVAL_SUFFIX:-}"
+INCLUDE_DETOXLLM="${INCLUDE_DETOXLLM:-0}"
 TASK_PREFIX_ARGS=()
 if [ -n "${TASK_PREFIX}" ]; then
     TASK_PREFIX_ARGS=(--task_prefix "${TASK_PREFIX}")
@@ -22,14 +23,15 @@ fi
 cd "${CODE_ROOT}"
 
 echo "=== Stage 3 evaluation job ==="
-echo "Code root: ${CODE_ROOT}"
-echo "HF cache:  ${HF_CACHE}"
-echo "Stage 1:   ${STAGE1_DIR}"
-echo "Val JSONL: ${VALIDATION_JSONL}"
-echo "Input fmt: ${INPUT_FORMAT}"
-echo "Eval suff: ${EVAL_SUFFIX}"
-echo "Ckpt suff: ${CHECKPOINT_SUFFIX}"
-echo "Output:    ${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
+echo "Code root:       ${CODE_ROOT}"
+echo "HF cache:        ${HF_CACHE}"
+echo "Stage 1:         ${STAGE1_DIR}"
+echo "Val JSONL:       ${VALIDATION_JSONL}"
+echo "Input fmt:       ${INPUT_FORMAT}"
+echo "Eval suff:       ${EVAL_SUFFIX}"
+echo "Ckpt suff:       ${CHECKPOINT_SUFFIX}"
+echo "Include DetoxLLM: ${INCLUDE_DETOXLLM}"
+echo "Output:          ${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
 echo ""
 
 VAL_COUNT="$(wc -l < "${VALIDATION_JSONL}")"
@@ -83,7 +85,36 @@ for COND in full target_only visual_only none; do
         "${OUTPUT_ROOT}/hmr_eval_stage2_${COND}${EVAL_SUFFIX}"
 done
 
-echo "=== Final evaluation: LLaVA teacher vs base BART vs finetuned BART ==="
+DETOXLLM_OUTPUT_DIR="${OUTPUT_ROOT}/hmr_eval_detoxllm${EVAL_SUFFIX}"
+DETOXLLM_OUTPUT_FILE="${DETOXLLM_OUTPUT_DIR}/detoxllm_rewrites.jsonl"
+
+if [ "${INCLUDE_DETOXLLM}" = "1" ]; then
+    if [ -f "${DETOXLLM_OUTPUT_FILE}" ]; then
+        DETOX_COUNT="$(wc -l < "${DETOXLLM_OUTPUT_FILE}")"
+        if [ "${DETOX_COUNT}" = "${VAL_COUNT}" ]; then
+            echo "--- DetoxLLM: found ${DETOXLLM_OUTPUT_FILE} (${DETOX_COUNT}/${VAL_COUNT}); skipping inference ---"
+        else
+            echo "--- DetoxLLM: found incomplete output (${DETOX_COUNT}/${VAL_COUNT}); recomputing ---"
+            python3 "${CODE_ROOT}/baselines/run_detoxllm_baseline.py" \
+                --validation_jsonl "${VALIDATION_JSONL}" \
+                --output_dir "${DETOXLLM_OUTPUT_DIR}" \
+                --hf_cache "${HF_CACHE}"
+        fi
+    else
+        echo "=== DetoxLLM inference ==="
+        python3 "${CODE_ROOT}/baselines/run_detoxllm_baseline.py" \
+            --validation_jsonl "${VALIDATION_JSONL}" \
+            --output_dir "${DETOXLLM_OUTPUT_DIR}" \
+            --hf_cache "${HF_CACHE}"
+    fi
+fi
+
+DETOXLLM_ARGS=()
+if [ "${INCLUDE_DETOXLLM}" = "1" ] && [ -f "${DETOXLLM_OUTPUT_FILE}" ]; then
+    DETOXLLM_ARGS=(--detoxllm_output_path "${DETOXLLM_OUTPUT_DIR}")
+fi
+
+echo "=== Final evaluation: LLaVA teacher vs BART base (ablation) vs finetuned BART vs DetoxLLM ==="
 python3 "${CODE_ROOT}/evaluation/evaluate.py" \
     --validation_jsonl "${VALIDATION_JSONL}" \
     --bart_base_output_dirs \
@@ -96,6 +127,7 @@ python3 "${CODE_ROOT}/evaluation/evaluate.py" \
         "${OUTPUT_ROOT}/hmr_eval_stage2_target_only${EVAL_SUFFIX}" \
         "${OUTPUT_ROOT}/hmr_eval_stage2_visual_only${EVAL_SUFFIX}" \
         "${OUTPUT_ROOT}/hmr_eval_stage2_none${EVAL_SUFFIX}" \
+    "${DETOXLLM_ARGS[@]}" \
     --output_dir "${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}" \
     --hf_cache "${HF_CACHE}"
 

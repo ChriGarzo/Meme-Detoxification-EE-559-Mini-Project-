@@ -63,6 +63,7 @@ Stage 3 ──── Evaluation  [GPU]
 **Models used:**
 - `llava-hf/llava-v1.6-mistral-7b-hf` — Stage 1 teacher
 - `facebook/bart-large` — Stage 2 student (LoRA fine-tuned, ~4.3% trainable params)
+- `UBC-NLP/DetoxLLM-7B` — external text-only detoxification baseline (fair comparison target)
 - `openai/clip-vit-large-patch14` — Stage 0 filter + Stage 4 proxy + Stage 2 eval visual features
 - `chiragmittal92/visualbert-hateful-memes-finetuned-model` — Stage 2 multimodal STA metric (eval-only)
 - `s-nlp/roberta_toxicity_classifier` — Stage 2 text STA metric
@@ -114,6 +115,13 @@ hateful_meme_rewriting/
 │   ├── run_llava_baseline.py          ← LLaVA structured-prompt baseline
 │   └── run_detoxllm_baseline.py
 │
+├── analysis/
+│   ├── aggregate_pipeline_co2.py      ← aggregate emissions CSVs + estimate training CO2
+│   ├── benchmark_single_inference.py  ← per-model single-step latency + CO2
+│   ├── recover_training_metrics.py
+│   ├── compare_stage2_outputs.py
+│   └── plot_proxy_training.py
+│
 ├── utils/
 │   ├── bertscore_utils.py             ← BERTScore batch helper
 │   └── debug.py
@@ -141,7 +149,10 @@ hateful_meme_rewriting/
     ├── runai_plot_proxy_curves.sh
     ├── runai_evaluate_proxy.sh
     ├── run_proxy_evaluate_job.sh
-    └── runai_evaluate.sh
+    ├── runai_evaluate.sh
+    ├── runai_evaluate_detoxllm.sh ← DetoxLLM baseline + full comparison (GPU)
+    ├── runai_pipeline_co2.sh      ← aggregate pipeline CO2 from existing CSVs (no GPU)
+    └── runai_benchmark_inference.sh ← per-model single-inference latency + CO2 (GPU)
 ```
 
 ---
@@ -464,6 +475,82 @@ bash scripts/runai_evaluate_proxy.sh <UID> legacy
 
 ---
 
+## Carbon Footprint and Inference Efficiency
+
+This section documents CO2 emissions across the pipeline and the inference-time efficiency difference between the compared systems. Tracking emissions was a design goal from the start: `codecarbon` is installed in the Docker image and every inference script wraps its compute with `EmissionsTracker`. Starting from the current run, training also tracks emissions directly.
+
+### Emission tracking setup
+
+| Pipeline stage | Tracking method |
+|---|---|
+| Stage 0 — OCR + CLIP filtering | Not tracked (short CPU/light-GPU job; excluded from totals) |
+| Stage 1A — LLaVA explanations (8 shards) | CodeCarbon per shard (`emissions_shard*.csv`) |
+| Stage 1B — LLaVA pseudo-rewrites (8 shards) | CodeCarbon per shard (`emissions_rewrite_only_shard*.csv`) |
+| Stage 2 — BART LoRA training (4 conditions) | CodeCarbon tracked from this run onward (`emissions.csv` per condition); estimated a posteriori for the current run from `training_history.json` duration × assumed GPU power |
+| Stage 3 — BART inference + evaluation | CodeCarbon per inference run (`emissions.csv` per condition) |
+| Proxy inference | CodeCarbon tracked |
+| DetoxLLM baseline | CodeCarbon tracked |
+
+All runs execute on `NVIDIA A100-SXM4-40GB` at EPFL RCP (Vaud, Switzerland). The measured carbon intensity for the cluster is approximately **34–35 g CO2/kWh** (Swiss electricity grid, low-carbon hydro+nuclear mix).
+
+### Aggregating pipeline CO2 (a posteriori, no re-run needed)
+
+```bash
+bash scripts/runai_pipeline_co2.sh <UID>
+# or locally (no GPU needed):
+cd hateful_meme_rewriting && python3 analysis/aggregate_pipeline_co2.py \
+    --scratch_dir /scratch \
+    --output_dir  /scratch/hmr_co2_summary
+```
+
+Outputs: `/scratch/hmr_co2_summary/pipeline_co2_summary.{json,tsv}`
+
+The script reads all existing `emissions*.csv` files and `training_history.json` files. For stages without direct CodeCarbon data (training in the current run), it estimates energy from `training_duration_seconds × 270 W` (A100 at ~68% TDP, typical for BART-large seq2seq training) and converts using the measured carbon intensity.
+
+**Pipeline CO2 summary** (measured 2026-05-07, carbon intensity 34.84 g CO2/kWh — Switzerland, Vaud, EPFL RCP):
+
+| Stage | Duration | Energy (kWh) | CO2 | Tracked |
+|---|---:|---:|---:|---|
+| Stage 1A — LLaVA explanations (8 shards) | 14.1 h | 6.61 | 230.3 g | yes |
+| Stage 1B — LLaVA pseudo-rewrites (8 shards) | 14.5 h | 5.78 | 201.3 g | yes |
+| Stage 2 — BART LoRA training (4 conditions) | 2.1 h | 0.56 | 19.4 g | estimated |
+| Stage 3 — BART-base inference (4 conditions) | 52.9 min | 0.18 | 6.3 g | yes |
+| Stage 3 — BART-finetuned inference (4 conditions) | 12.3 min | 0.04 | 1.5 g | yes |
+| Proxy inference | 3.4 min | 0.01 | 0.5 g | yes |
+| DetoxLLM baseline | — | — | — | pending |
+| **TOTAL (without DetoxLLM)** | **31.9 h** | **13.18** | **459 g** | |
+
+Key observation: **93% of the total pipeline CO2 comes from Stage 1 (LLaVA inference)**. BART fine-tuning contributes only ~4% and BART inference at evaluation time contributes ~1.6%. This confirms that the teacher distillation cost is a one-time training overhead, and the deployed student (BART finetuned) is highly efficient.
+
+### Per-model inference efficiency
+
+To report how much faster and greener our student model is compared to the teacher and the text-only baseline:
+
+```bash
+bash scripts/runai_benchmark_inference.sh <UID>
+```
+
+This runs `analysis/benchmark_single_inference.py` on a single validation example. Each model runs 3 warmup passes (not measured) then 10 timed passes under CodeCarbon. Models are loaded and released one at a time.
+
+**What is timed:**
+- `llava_teacher`: `explain()` + `generate_rewrite()` — the full Stage 1 per-meme pipeline (two 7B forward passes)
+- `detoxllm`: `detoxify()` — one 7B forward pass on text only
+- `bart_finetuned`: `rewrite()` with `condition=full` — one 400M forward pass on text
+
+**Benchmark results** (to be filled once `runai_benchmark_inference.sh` completes):
+
+| System | Params | Load time | Mean inference | CO2/inference | CO2/358 examples |
+|---|---:|---:|---:|---:|---:|
+| `llava_teacher` | 7B | — | — ms | — μg | — mg |
+| `detoxllm` | 7B | — | — ms | — μg | — mg |
+| `bart_finetuned` | 400M | — | — ms | — μg | — mg |
+| **Speedup BART vs LLaVA** | — | — | — × | — | — |
+| **Speedup BART vs DetoxLLM** | — | — | — × | — | — |
+
+The expected outcome: BART finetuned should be roughly **20–50× faster** per inference than LLaVA and DetoxLLM, and emit proportionally less CO2, because it is a ~18× smaller model (400M vs 7B) that requires only one seq2seq forward pass instead of two causal-LM forward passes.
+
+---
+
 ## Current Experiment Report
 
 This section summarizes the current state of the repository and the results obtained from the latest full pipeline run. The goal of the project is not to outperform LLaVA-Next directly. LLaVA-Next is used as a large teacher model to produce explanations and pseudo-rewrites; the real objective is to fine-tune a much smaller BART-large student so that it can detoxify meme text while preserving the intended meaning as much as possible.
@@ -525,12 +612,15 @@ The implemented pipeline follows an explain-then-rewrite strategy:
    Proxy inference now evaluates the intended final sequence directly:
    CLIP image/text embeddings are concatenated, the proxy predicts a short sequence of `full` BART encoder hidden states, and the `full` BART decoder generates the rewrite from that predicted encoder memory. This avoids using LLaVA explanations at inference time while still testing whether the proxy can provide useful context for the fine-tuned BART decoder.
 
-8. **Evaluate all systems on the held-out validation set.** The evaluation script compares:
-   - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/val.jsonl`.
-   - `bart_base_*`: non-finetuned `facebook/bart-large` under the four input conditions.
-   - `bart_finetuned_*`: the four LoRA-finetuned BART models.
+8. **Evaluate all systems on the held-out validation set.** The primary comparison is:
+   - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/val.jsonl`. Upper bound — LLaVA is both teacher and label source.
+   - `detoxllm`: `UBC-NLP/DetoxLLM-7B`, a 7B causal LM purpose-trained for text detoxification. Text-only; does not use images. This is the main external baseline because it was trained to do the same task, making it a fair point of comparison for our fine-tuned BART.
+   - `bart_finetuned_*`: the four LoRA-finetuned BART models. Our contribution.
+   - `bart_base_*`: non-finetuned `facebook/bart-large` under the four input conditions. Included as an internal ablation to demonstrate the effect of fine-tuning, **not** as a competitive baseline.
 
-   All systems are evaluated on the same 358 validation examples. The evaluation uses the exact BART outputs as generated. The code does not sanitize or post-process BART rewrites before scoring. The only truncation is internal to CLIPScore because CLIP has a hard 77-token text limit.
+   The DetoxLLM comparison is especially informative because both DetoxLLM and our fine-tuned BART operate without image access at inference time (DetoxLLM by design; BART because the visual context comes from LLaVA-generated text during training). Where they may differ is in CLIPScore: our BART was trained on examples where the rewrite was grounded to meme images via LLaVA explanations, so its outputs may preserve image-text alignment better than a purely text-trained system like DetoxLLM.
+
+   All systems are evaluated on the same 358 validation examples. The evaluation uses the exact model outputs as generated. The code does not sanitize or post-process rewrites before scoring. The only truncation is internal to CLIPScore because CLIP has a hard 77-token text limit.
 
 ### Evaluation Outputs
 
@@ -619,7 +709,9 @@ Proxy soft tokens + explicit detox BART prompt encoder states (`/scratch/hmr_eva
 
 ### Main Findings
 
-The most important result is that LoRA fine-tuning makes BART much more faithful to the rewriting task.
+#### Fine-tuning ablation (BART base → BART finetuned)
+
+BART base is included as an internal ablation, not as a competitive baseline. Its results confirm that LoRA fine-tuning is necessary: without it, BART produces semantically disconnected outputs even when the text is superficially non-toxic.
 
 Compared with non-finetuned BART, the finetuned BART models move from negative SIM scores to clearly positive SIM scores:
 
@@ -630,8 +722,6 @@ Compared with non-finetuned BART, the finetuned BART models move from negative S
 | `visual_only` | -0.2320 | 0.3252 | +0.5572 |
 | `none` | -0.2954 | 0.3261 | +0.6215 |
 
-This means that non-finetuned BART can often produce superficially safe text, but those outputs are not semantically close to the desired rewrite. Fine-tuning teaches BART the actual meme rewriting distribution: the output remains much closer to the original/teacher meaning while still reducing textual toxicity.
-
 CLIPScore also improves in every condition:
 
 | Condition | Base BART CLIP | Finetuned BART CLIP | Change |
@@ -640,8 +730,6 @@ CLIPScore also improves in every condition:
 | `target_only` | 0.5948 | 0.6219 | +0.0271 |
 | `visual_only` | 0.5995 | 0.6261 | +0.0266 |
 | `none` | 0.5945 | 0.6256 | +0.0311 |
-
-This suggests that the finetuned outputs are not only textually closer to the target rewrite, but also more compatible with the meme image.
 
 Textual detoxification remains high after fine-tuning:
 
@@ -652,9 +740,20 @@ Textual detoxification remains high after fine-tuning:
 | `visual_only` | 0.9242 | 0.9169 |
 | `none` | 0.9355 | 0.9178 |
 
-The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions have slightly lower text STA than their base-BART counterparts, but they are far more faithful. For the project goal, this trade-off is acceptable: a model that keeps `text_sta` around 0.91-0.93 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
+The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions have slightly lower text STA than their base-BART counterparts but are far more faithful. For the project goal this trade-off is acceptable: a model that keeps `text_sta` around 0.91–0.93 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
 
-The LLaVA teacher remains the best system overall in text STA and SIM. This is expected because LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant comparison for the student model is therefore not "does BART beat LLaVA?", but "does fine-tuning make BART a useful small detoxification model?". The answer from the current results is yes.
+#### External comparison: finetuned BART vs DetoxLLM
+
+DetoxLLM (`UBC-NLP/DetoxLLM-7B`) is the primary external baseline. It was explicitly trained for text detoxification on the ParaDetox parallel corpus, making it a fair competitor for our fine-tuned BART models. Neither system uses the meme image at inference time.
+
+The expected outcome of this comparison is:
+- **Text STA**: both models should perform similarly — they are both detoxification-trained, so neither should have a large advantage in raw toxicity reduction.
+- **SIM**: unclear a priori; DetoxLLM was trained on a broad web-text detox corpus (ParaDetox), whereas our BART was fine-tuned on meme-specific pseudo-rewrites from LLaVA. BART may be more faithful to the meme rewriting style.
+- **CLIPScore**: our BART was trained on examples where rewrites were grounded to meme images via LLaVA visual explanations. DetoxLLM has never seen images. We expect BART to have a measurable CLIPScore advantage, demonstrating the value of multimodal grounding in training even when images are not used at inference time.
+
+See the DetoxLLM results table below (once the job completes) for actual numbers.
+
+The LLaVA teacher remains the reference upper bound for text STA and SIM. This is expected: LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant question for the student is not "does BART beat LLaVA?" but "does our multimodally-grounded fine-tuning produce better rewrites than a text-only detoxification system of similar deployment cost?"
 
 ### Important Caveat About VisualBERT
 
@@ -735,12 +834,14 @@ The current finetuning is useful for the intended scope. It distills part of LLa
 - It avoids obvious collapse.
 - It can be evaluated under multiple conditioning ablations.
 
+The comparison with DetoxLLM is the main external validity check. Both are inference-time text-only models; the difference is that ours was fine-tuned on meme-specific rewrites grounded by visual explanations from LLaVA, while DetoxLLM was trained on general-purpose text detoxification data. If our model matches DetoxLLM on text STA and outperforms it on CLIPScore, that demonstrates the benefit of multimodal grounding in training even when images are not used at inference time.
+
 The most interesting next steps are:
 
-1. Improve or replace the multimodal toxicity metric, because the current VisualBERT score is not sufficiently informative.
-2. Inspect qualitative outputs per condition to understand why `none`, `visual_only`, and `full` are close in final performance.
-3. Consider stronger conditioning usage, for example by training a single multi-condition model with explicit condition dropout rather than four fully separate models.
-4. Report the fine-tuned BART result primarily as a compact student model that trades a small loss in teacher-level quality for much lower inference cost.
+1. Analyse the DetoxLLM comparison once results are available, focusing on CLIPScore vs SIM trade-offs.
+2. Improve or replace the multimodal toxicity metric, because the current VisualBERT score is not sufficiently informative.
+3. Inspect qualitative outputs per condition to understand why `none`, `visual_only`, and `full` are close in final performance.
+4. Consider stronger conditioning usage, for example by training a single multi-condition model with explicit condition dropout rather than four fully separate models.
 
 ---
 
@@ -751,3 +852,4 @@ The most interesting next steps are:
 - Gomez et al. (2020). Exploring Hate Speech Detection in Multimodal Publications. *CVPRW*.
 - Logacheva et al. (2022). ParaDetox: Detoxification with Parallel Data. *ACL*.
 - Liu et al. (2024). LLaVA-1.6: Improved Baselines with Visual Instruction Tuning. *arXiv:2401.00774*.
+- Hallinan et al. (2023). DetoxLLM: An LLM-based text detoxification system. UBC-NLP.

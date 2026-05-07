@@ -4,8 +4,10 @@ DetoxLLM baseline: text-only detoxification without images.
 import argparse
 import json
 import logging
+import os
+import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import random
 
 import numpy as np
@@ -14,7 +16,8 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from codecarbon import EmissionsTracker
 
-from utils.debug import is_debug_mode, setup_debug_mode, DEBUG_CONFIG
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.debug import is_debug_mode, DEBUG_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +128,11 @@ class DetoxLLMBaseline:
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             # Generate
+            input_len = inputs["input_ids"].shape[1]
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=100,
+                    max_length=input_len + 100,
                     do_sample=True,
                     temperature=0.7,
                     top_p=0.9,
@@ -154,102 +158,95 @@ class DetoxLLMBaseline:
             logger.error(f"Error in detoxification: {e}")
             return text
 
-    def process_batch(self, texts: List[str], batch_size: int = 4) -> List[Dict]:
+    def process_records(self, records: List[Dict]) -> List[Dict]:
         """
-        Process a batch of texts.
+        Detoxify a list of validation records.
 
         Args:
-            texts: List of original texts
-            batch_size: Batch size (for consistency)
+            records: List of records with at least 'id', 'original_text', 'image_path' keys.
 
         Returns:
-            List of results with keys: idx, original_text, rewrite
+            List of output records with 'id', 'system', 'original_text', 'rewrite', 'image_path'.
         """
         results = []
-
-        for idx, text in enumerate(tqdm(texts, desc="Detoxifying")):
-            rewrite = self.detoxify(text)
+        for rec in tqdm(records, desc="Detoxifying"):
+            original = rec.get("original_text") or rec.get("text") or ""
+            rewrite = self.detoxify(original) if original else original
             results.append({
-                "idx": idx,
-                "original_text": text,
-                "rewrite": rewrite
+                "id": rec.get("id"),
+                "system": "detoxllm",
+                "original_text": original,
+                "rewrite": rewrite,
+                "image_path": rec.get("image_path") or "",
             })
-
         return results
 
 
-def load_stage1_outputs(stage1_file: Path) -> List[Dict]:
-    """Load Stage 1 outputs from JSONL."""
-    outputs = []
-    if not stage1_file.exists():
-        logger.warning(f"Stage 1 file not found: {stage1_file}")
-        return outputs
-
-    with open(stage1_file) as f:
+def load_validation_jsonl(path: Path) -> List[Dict]:
+    """Load records from the Stage 2 validation JSONL."""
+    records: List[Dict] = []
+    if not path.exists():
+        logger.warning(f"Validation JSONL not found: {path}")
+        return records
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
-            outputs.append(json.loads(line))
-
-    return outputs
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    logger.warning(f"Skipping invalid JSON line: {exc}")
+    return records
 
 
 def main():
     parser = argparse.ArgumentParser(description="DetoxLLM baseline for hateful meme text rewriting")
-    parser.add_argument("--stage1_outputs", type=Path, required=True, help="Stage 1 outputs JSONL")
+    parser.add_argument(
+        "--validation_jsonl", type=Path, required=True,
+        help="Stage 2 validation JSONL (hmr_stage2_dataset/val.jsonl)"
+    )
     parser.add_argument("--output_dir", type=Path, required=True, help="Output directory")
     parser.add_argument("--hf_cache", type=str, default=None, help="Hugging Face cache directory")
     parser.add_argument("--load_in_4bit", action="store_true", help="Load model in 4-bit")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 
     args = parser.parse_args()
 
     if args.debug:
-        setup_debug_mode()
+        os.environ["DEBUG"] = "1"
 
     setup_logging(debug=args.debug)
     logger.info("Starting DetoxLLM baseline")
 
-    # Set random seeds
     np.random.seed(42)
     torch.manual_seed(42)
     random.seed(42)
 
-    # Load Stage 1 outputs
-    stage1_outputs = load_stage1_outputs(args.stage1_outputs)
-    logger.info(f"Loaded {len(stage1_outputs)} Stage 1 outputs")
+    records = load_validation_jsonl(args.validation_jsonl)
+    logger.info(f"Loaded {len(records)} validation records")
 
     if args.debug:
-        stage1_outputs = stage1_outputs[:DEBUG_CONFIG["max_examples"]]
-        logger.info(f"DEBUG mode: processing only {len(stage1_outputs)} examples")
+        records = records[:DEBUG_CONFIG["max_samples"]]
+        logger.info(f"DEBUG mode: processing only {len(records)} examples")
 
-    # Extract texts
-    texts = [item["text"] for item in stage1_outputs]
-    logger.info(f"Processing {len(texts)} texts")
-
-    # Initialize baseline
     baseline = DetoxLLMBaseline(
         hf_cache=args.hf_cache,
         load_in_4bit=args.load_in_4bit,
         debug=args.debug
     )
 
-    # Process batch with CO2 tracking
-    def run_detoxification():
-        return baseline.process_batch(texts, batch_size=args.batch_size)
-
     args.output_dir.mkdir(parents=True, exist_ok=True)
     tracker = EmissionsTracker(log_level="warning", output_dir=str(args.output_dir), output_file="emissions.csv")
     tracker.start()
-    results = run_detoxification()
+    results = baseline.process_records(records)
     co2_emissions = tracker.stop()
     if co2_emissions is not None:
         logger.info(f"CO2 emissions: {co2_emissions:.4f}g")
     else:
         logger.warning("CO2 emissions could not be measured")
 
-    output_file = args.output_dir / "detoxllm_text_only.jsonl"
-
-    with open(output_file, "w") as f:
+    output_file = args.output_dir / "detoxllm_rewrites.jsonl"
+    with open(output_file, "w", encoding="utf-8") as f:
         for result in results:
             f.write(json.dumps(result) + "\n")
 

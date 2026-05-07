@@ -29,6 +29,8 @@ import warnings
 from pathlib import Path
 from typing import Optional, Tuple
 
+from codecarbon import EmissionsTracker
+
 import easyocr
 import numpy as np
 import torch
@@ -477,6 +479,14 @@ def main():
             "Raise this value to keep fewer but cleaner MMHS150K images."
         )
     )
+    parser.add_argument(
+        "--force_rerun",
+        action="store_true",
+        help=(
+            "Re-run filtering even if the manifest already exists. "
+            "Useful for measuring CO2 without changing filtering results."
+        )
+    )
     args = parser.parse_args()
 
     # Setup logging
@@ -517,7 +527,7 @@ def main():
     # ------------------------------------------------------------------
     # Resume check: skip if manifest already exists, unless --force_rerun.
     # ------------------------------------------------------------------
-    if output_path.exists():
+    if output_path.exists() and not args.force_rerun:
         logger.info(f"Manifest already exists at {output_path} — skipping filtering.")
         return 0
 
@@ -533,7 +543,16 @@ def main():
         mmhs150k_clip_threshold=args.mmhs150k_clip_threshold,
     )
 
+    tracker = EmissionsTracker(
+        log_level="warning",
+        output_dir=str(output_path.parent),
+        output_file=f"emissions_stage0_{args.dataset}.csv",
+    )
+    tracker.start()
     results, stats = filter_obj.filter_dataset(args.images_dir, args.dataset)
+    co2_kg = tracker.stop() or 0.0
+    if co2_kg > 0:
+        logger.info(f"Stage 0 CO2 ({args.dataset}): {co2_kg*1e3:.4f} g")
 
     if not results:
         logger.error("No images were processed")

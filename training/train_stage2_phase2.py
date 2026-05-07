@@ -54,6 +54,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
+from codecarbon import EmissionsTracker
+
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
@@ -1071,9 +1073,19 @@ def main():
     # Train
     # -----------------------------------------------------------------------
     logger.info(f"Starting Phase 2 LoRA training (condition={args.condition})...")
+    os.makedirs(args.output_dir, exist_ok=True)
+    _co2_tracker = EmissionsTracker(
+        log_level="warning",
+        output_dir=str(args.output_dir),
+        output_file="emissions.csv",
+    )
+    _co2_tracker.start()
     t0 = time.time()
     trainer.train()
     training_duration = time.time() - t0
+    _training_co2_kg = _co2_tracker.stop() or 0.0
+    if _training_co2_kg > 0:
+        logger.info(f"Training CO2 emissions: {_training_co2_kg*1e3:.4f} g CO2 ({_training_co2_kg:.6f} kg)")
 
     # -----------------------------------------------------------------------
     # Save: adapter weights (reproducibility) + merged model (pipeline compat)
@@ -1198,6 +1210,7 @@ def main():
         },
         "results": {
             "training_duration_seconds":  round(training_duration, 1),
+            "training_co2_kg":            round(_training_co2_kg, 8),
             "total_steps":                trainer.state.global_step,
             "best_metric_name":           "eval_detox_quality",
             "best_metric_value":          best_eval_entry.get("eval_detox_quality") if best_eval_entry else None,
