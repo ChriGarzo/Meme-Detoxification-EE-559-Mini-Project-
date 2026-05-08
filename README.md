@@ -544,13 +544,13 @@ This runs `analysis/benchmark_single_inference.py` on a single validation exampl
 
 | System | Params | Load time | Mean inference | CO2/inference | CO2/358 examples |
 |---|---:|---:|---:|---:|---:|
-| `llava_teacher` | 7B | — | — ms | — μg | — mg |
-| `detoxllm` | 6.7B | 30.7 s | 983 ms | 2 878 μg | 1 030 mg |
-| `bart_finetuned` | 400M | — | — ms | — μg | — mg |
-| **Speedup BART vs LLaVA** | — | — | — × | — | — |
-| **Speedup BART vs DetoxLLM** | — | — | — × | — | — |
+| `llava_teacher` | 7.6B | 16.8 s | 9 376 ms | 34 340 μg | 12 294 mg |
+| `detoxllm` | 6.7B | 21.4 s | 1 989 ms | 5 646 μg | 2 021 mg |
+| `bart_finetuned` | 406M | 4.0 s | 122 ms | 360 μg | 129 mg |
+| **Speedup BART vs LLaVA** | 19× fewer | 4.2× | **76.6×** | **95.4×** | **95.4×** |
+| **Speedup BART vs DetoxLLM** | 17× fewer | 5.4× | **16.3×** | **15.7×** | **15.7×** |
 
-LLaVA and BART finetuned results pending a re-run of `runai_benchmark_inference.sh` (a parameter name bug in the benchmark script was fixed — `hf_cache`/`checkpoint_dir` → `cache_dir`/`checkpoint_path`).
+BART finetuned is **76.6× faster** than LLaVA and **16.3× faster** than DetoxLLM, with CO2 per inference reduced by 95× and 16× respectively. The large gap vs LLaVA comes from running two 7B causal-LM forward passes per meme (explain + rewrite) vs a single 406M encoder-decoder pass. The gap vs DetoxLLM — both text-only at inference time — reflects the cost difference between autoregressive decoding in a 7B causal LM and a 400M seq2seq model.
 
 ---
 
@@ -659,10 +659,7 @@ Latest `evaluation_summary.tsv`:
 | System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `bart_base_full` | 358 | 0.9088 | 0.2376 | -0.2235 | 0.6073 | 0.6582 | 0.0000 | -0.0122 |
-| `bart_base_target_only` | 358 | 0.9410 | 0.2698 | -0.3046 | 0.5948 | 0.6601 | 0.0000 | -0.0142 |
-| `bart_base_visual_only` | 358 | 0.9242 | 0.2530 | -0.2320 | 0.5995 | 0.6624 | 0.0000 | -0.0165 |
-| `bart_base_none` | 358 | 0.9355 | 0.2643 | -0.2954 | 0.5945 | 0.6640 | 0.0000 | -0.0181 |
+| `detoxllm` | 358 | 0.8894 | 0.2182 | 0.4202 | 0.6251 | 0.6517 | 0.0028 | -0.0057 |
 | `bart_finetuned_full` | 358 | 0.9261 | 0.2548 | 0.2991 | 0.6236 | 0.6539 | 0.0000 | -0.0080 |
 | `bart_finetuned_target_only` | 358 | 0.9131 | 0.2419 | 0.2815 | 0.6219 | 0.6523 | 0.0000 | -0.0063 |
 | `bart_finetuned_visual_only` | 358 | 0.9169 | 0.2456 | 0.3252 | 0.6261 | 0.6522 | 0.0000 | -0.0063 |
@@ -749,12 +746,20 @@ The `full` condition improves both text STA and faithfulness over base BART. The
 
 DetoxLLM (`UBC-NLP/DetoxLLM-7B`) is the primary external baseline. It was explicitly trained for text detoxification on the ParaDetox parallel corpus, making it a fair competitor for our fine-tuned BART models. Neither system uses the meme image at inference time.
 
-The expected outcome of this comparison is:
-- **Text STA**: both models should perform similarly — they are both detoxification-trained, so neither should have a large advantage in raw toxicity reduction.
-- **SIM**: unclear a priori; DetoxLLM was trained on a broad web-text detox corpus (ParaDetox), whereas our BART was fine-tuned on meme-specific pseudo-rewrites from LLaVA. BART may be more faithful to the meme rewriting style.
-- **CLIPScore**: our BART was trained on examples where rewrites were grounded to meme images via LLaVA visual explanations. DetoxLLM has never seen images. We expect BART to have a measurable CLIPScore advantage, demonstrating the value of multimodal grounding in training even when images are not used at inference time.
+Results (358 validation examples):
 
-See the DetoxLLM results table below (once the job completes) for actual numbers.
+| Metric | DetoxLLM | BART finetuned `full` | BART finetuned `visual_only` |
+|---|---:|---:|---:|
+| Text STA | 0.8894 | **0.9261** | 0.9169 |
+| Text STA Delta | 0.2182 | **0.2548** | 0.2456 |
+| SIM | **0.4202** | 0.2991 | 0.3252 |
+| CLIPScore | **0.6251** | 0.6236 | 0.6261 |
+
+Key findings:
+
+- **Text STA**: all finetuned BART conditions (0.913–0.926) outperform DetoxLLM (0.889). DetoxLLM was trained on broad web-text detoxification and struggles with meme-style OCR captions — it produces exact copies for ~14% of inputs, which drags down its average toxicity reduction.
+- **SIM**: DetoxLLM scores higher (0.420 vs 0.299–0.326). This is a direct consequence of the copy behaviour — verbatim copies produce artificially high semantic similarity — rather than genuine meaning preservation in rewrites.
+- **CLIPScore**: effectively equal (0.625 for both). Neither system uses the image at inference time; both inherit image-text alignment from the training distribution. The `visual_only` and `none` BART conditions marginally edge out DetoxLLM (0.626 vs 0.625).
 
 The LLaVA teacher remains the reference upper bound for text STA and SIM. This is expected: LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant question for the student is not "does BART beat LLaVA?" but "does our multimodally-grounded fine-tuning produce better rewrites than a text-only detoxification system of similar deployment cost?"
 
