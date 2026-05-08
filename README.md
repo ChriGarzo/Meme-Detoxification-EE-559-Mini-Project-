@@ -483,7 +483,7 @@ This section documents CO2 emissions across the pipeline and the inference-time 
 
 | Pipeline stage | Tracking method |
 |---|---|
-| Stage 0 — OCR + CLIP filtering | Not tracked (short CPU/light-GPU job; excluded from totals) |
+| Stage 0 — OCR + CLIP filtering | CodeCarbon tracked (`emissions_stage0_<dataset>.csv` per dataset, written by `filter_meme_images.py`) |
 | Stage 1A — LLaVA explanations (8 shards) | CodeCarbon per shard (`emissions_shard*.csv`) |
 | Stage 1B — LLaVA pseudo-rewrites (8 shards) | CodeCarbon per shard (`emissions_rewrite_only_shard*.csv`) |
 | Stage 2 — BART LoRA training (4 conditions) | CodeCarbon tracked from this run onward (`emissions.csv` per condition); estimated a posteriori for the current run from `training_history.json` duration × assumed GPU power |
@@ -505,22 +505,25 @@ cd hateful_meme_rewriting && python3 analysis/aggregate_pipeline_co2.py \
 
 Outputs: `/scratch/hmr_co2_summary/pipeline_co2_summary.{json,tsv}`
 
-The script reads all existing `emissions*.csv` files and `training_history.json` files. For stages without direct CodeCarbon data (training in the current run), it estimates energy from `training_duration_seconds × 270 W` (A100 at ~68% TDP, typical for BART-large seq2seq training) and converts using the measured carbon intensity.
+The script reads all `emissions*.csv` files written by CodeCarbon across every pipeline stage. All stages are directly tracked.
 
-**Pipeline CO2 summary** (measured 2026-05-07, carbon intensity 34.84 g CO2/kWh — Switzerland, Vaud, EPFL RCP):
+**Pipeline CO2 summary** (measured 2026-05-08, carbon intensity 34.84 g CO2/kWh — Switzerland, Vaud, EPFL RCP):
 
-| Stage | Duration | Energy (kWh) | CO2 | Tracked |
-|---|---:|---:|---:|---|
-| Stage 1A — LLaVA explanations (8 shards) | 14.1 h | 6.61 | 230.3 g | yes |
-| Stage 1B — LLaVA pseudo-rewrites (8 shards) | 14.5 h | 5.78 | 201.3 g | yes |
-| Stage 2 — BART LoRA training (4 conditions) | 2.1 h | 0.56 | 19.4 g | estimated |
-| Stage 3 — BART-base inference (4 conditions) | 52.9 min | 0.18 | 6.3 g | yes |
-| Stage 3 — BART-finetuned inference (4 conditions) | 12.3 min | 0.04 | 1.5 g | yes |
-| Proxy inference | 3.4 min | 0.01 | 0.5 g | yes |
-| DetoxLLM baseline | — | — | — | pending |
-| **TOTAL (without DetoxLLM)** | **31.9 h** | **13.18** | **459 g** | |
+| Stage | GPU-time | Energy (kWh) | CO2 |
+|---|---:|---:|---:|
+| Stage 0 — OCR + CLIP filtering (163 544 images) | 2.8 h | 0.76 | 26.7 g |
+| Stage 1A — LLaVA explanations (8 shards) | 14.1 h | 6.61 | 230.3 g |
+| Stage 1B — LLaVA pseudo-rewrites (8 shards) | 14.5 h | 5.78 | 201.3 g |
+| Stage 2 — BART LoRA training (4 conditions) | 2.1 h | 0.82 | 28.4 g |
+| Stage 3 — BART-base inference (4 conditions) | 52.9 min | 0.18 | 6.3 g |
+| Stage 3 — BART-finetuned inference (4 conditions) | 12.3 min | 0.04 | 1.5 g |
+| Proxy inference | 3.4 min | 0.01 | 0.5 g |
+| DetoxLLM baseline | 7.9 min | 0.04 | 1.3 g |
+| **TOTAL** | **34.8 h** | **14.24** | **496 g** |
 
-Key observation: **93% of the total pipeline CO2 comes from Stage 1 (LLaVA inference)**. BART fine-tuning contributes only ~4% and BART inference at evaluation time contributes ~1.6%. This confirms that the teacher distillation cost is a one-time training overhead, and the deployed student (BART finetuned) is highly efficient.
+GPU-time is the sum of compute time across all parallel shards/jobs (e.g. Stage 1A/1B each ran as 8 simultaneous GPU shards, so 14+ GPU-hours of energy even though wall-clock was ~1.8 h per stage). Energy and CO2 are derived from this total GPU-time.
+
+Key observation: **87% of the total pipeline CO2 comes from Stage 1 (LLaVA inference)**. Stage 0 filtering across 163 K images and BART fine-tuning each account for ~5–6%, and all BART inference at evaluation time less than 2%. This confirms that the teacher distillation cost is a one-time training overhead, and the deployed student (BART finetuned) is highly efficient.
 
 ### Per-model inference efficiency
 
@@ -537,17 +540,17 @@ This runs `analysis/benchmark_single_inference.py` on a single validation exampl
 - `detoxllm`: `detoxify()` — one 7B forward pass on text only
 - `bart_finetuned`: `rewrite()` with `condition=full` — one 400M forward pass on text
 
-**Benchmark results** (to be filled once `runai_benchmark_inference.sh` completes):
+**Benchmark results** (measured 2026-05-08, A100-SXM4-40GB, 10 timed passes per model):
 
 | System | Params | Load time | Mean inference | CO2/inference | CO2/358 examples |
 |---|---:|---:|---:|---:|---:|
 | `llava_teacher` | 7B | — | — ms | — μg | — mg |
-| `detoxllm` | 7B | — | — ms | — μg | — mg |
+| `detoxllm` | 6.7B | 30.7 s | 983 ms | 2 878 μg | 1 030 mg |
 | `bart_finetuned` | 400M | — | — ms | — μg | — mg |
 | **Speedup BART vs LLaVA** | — | — | — × | — | — |
 | **Speedup BART vs DetoxLLM** | — | — | — × | — | — |
 
-The expected outcome: BART finetuned should be roughly **20–50× faster** per inference than LLaVA and DetoxLLM, and emit proportionally less CO2, because it is a ~18× smaller model (400M vs 7B) that requires only one seq2seq forward pass instead of two causal-LM forward passes.
+LLaVA and BART finetuned results pending a re-run of `runai_benchmark_inference.sh` (a parameter name bug in the benchmark script was fixed — `hf_cache`/`checkpoint_dir` → `cache_dir`/`checkpoint_path`).
 
 ---
 

@@ -97,7 +97,7 @@ def benchmark_llava(
     text = example.get("original_text") or example.get("text") or ""
 
     t_load_start = time.perf_counter()
-    explainer = MemeExplainer(hf_cache=hf_cache)
+    explainer = MemeExplainer(cache_dir=hf_cache)
     load_time_s = time.perf_counter() - t_load_start
     logger.info("LLaVA loaded in %.1f s", load_time_s)
 
@@ -233,7 +233,7 @@ def benchmark_bart_finetuned(
     implicit_meaning = example.get("implicit_meaning") or ""
 
     t_load_start = time.perf_counter()
-    rewriter = MemeRewriter(checkpoint_dir=str(checkpoint_dir), hf_cache=hf_cache)
+    rewriter = MemeRewriter(checkpoint_path=str(checkpoint_dir), cache_dir=hf_cache)
     load_time_s = time.perf_counter() - t_load_start
     logger.info("BART-finetuned loaded in %.1f s", load_time_s)
 

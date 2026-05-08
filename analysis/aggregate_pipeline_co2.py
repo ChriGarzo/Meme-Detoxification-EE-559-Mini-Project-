@@ -111,7 +111,7 @@ STAGE_DEFS = [
 
 TRAINING_STAGE_DEF = (
     "stage2_bart_training",
-    "BART LoRA training (4 conditions, ESTIMATED)",
+    "BART LoRA training (4 conditions)",
     [
         "hmr_stage2_phase2_full_checkpoint/training_history.json",
         "hmr_stage2_phase2_target_only_checkpoint/training_history.json",
@@ -119,6 +119,13 @@ TRAINING_STAGE_DEF = (
         "hmr_stage2_phase2_none_checkpoint/training_history.json",
     ],
 )
+
+TRAINING_EMISSIONS_GLOBS = [
+    "hmr_stage2_phase2_full_checkpoint/emissions.csv",
+    "hmr_stage2_phase2_target_only_checkpoint/emissions.csv",
+    "hmr_stage2_phase2_visual_only_checkpoint/emissions.csv",
+    "hmr_stage2_phase2_none_checkpoint/emissions.csv",
+]
 
 
 def read_emissions_csv(path: Path) -> List[Dict]:
@@ -188,8 +195,41 @@ def estimate_training_co2(
     carbon_intensity: float,
     gpu_power_w: float,
 ) -> Dict:
-    """Estimate training CO2 from training_history.json files."""
+    """Return training CO2 from emissions CSVs (preferred) or training_history.json estimate."""
     stage_id, description, history_globs = TRAINING_STAGE_DEF
+
+    # ── Path 1: emissions CSVs exist (preferred) ──────────────────────────
+    all_rows: List[Dict] = []
+    found_files: List[str] = []
+    for glob in TRAINING_EMISSIONS_GLOBS:
+        p = scratch_dir / glob
+        if p.exists():
+            rows = read_emissions_csv(p)
+            if rows:
+                all_rows.extend(rows)
+                found_files.append(str(p.relative_to(scratch_dir)))
+
+    if all_rows:
+        agg = aggregate_csv_rows(all_rows)
+        logger.info(
+            "Training: found %d emissions CSV(s), %.0f s, %.6f kg CO2",
+            len(found_files), agg["duration_s"], agg["co2_kg"],
+        )
+        return {
+            "stage": stage_id,
+            "description": description,
+            "tracked": True,
+            "estimated": False,
+            "found": True,
+            "files": found_files,
+            "num_csv_rows": agg["num_rows"],
+            "duration_s": agg["duration_s"],
+            "energy_kwh": agg["energy_kwh"],
+            "co2_kg": agg["co2_kg"],
+            "mean_gpu_power_w": agg["mean_gpu_power_w"],
+        }
+
+    # ── Path 2: fall back to duration × power estimate ────────────────────
     conditions = {}
     total_duration = 0.0
 
@@ -200,7 +240,6 @@ def estimate_training_co2(
             logger.warning("training_history.json not found: %s", history_path)
             conditions[cond] = None
             continue
-
         try:
             data = json.loads(history_path.read_text(encoding="utf-8"))
             cond = data.get("condition") or history_path.parent.name
