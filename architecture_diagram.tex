@@ -1,0 +1,81 @@
+\documentclass[tikz,border=5pt]{standalone}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta}
+
+\begin{document}
+
+\begin{tikzpicture}[
+    node distance=0.62cm and 0.62cm,
+    every node/.style={font=\sffamily},
+    box/.style={
+        rectangle,
+        rounded corners=7pt,
+        draw=#1,
+        fill=#1!11,
+        very thick,
+        align=center,
+        text width=3.55cm,
+        minimum height=1.22cm,
+        inner sep=5pt,
+        font=\sffamily\scriptsize
+    },
+    arrow/.style={
+        -{Latex[length=2.2mm, width=1.6mm]},
+        very thick,
+        color=black!75
+    },
+    optional/.style={
+        arrow,
+        dashed,
+        color=black!55
+    }
+]
+
+\node[box=blue] (stage0) {
+    \textbf{Stage 0 ---}\\
+    \textbf{Data Preparation}\\
+    EasyOCR extraction\\
+    + CLIP meme filtering
+};
+
+\node[box=green!60!black, right=of stage0] (stage1) {
+    \textbf{Stage 1 ---}\\
+    \textbf{LLaVA-Next Teacher}\\
+    Hate explanations\\
+    + pseudo-detoxified\\
+    rewrites
+};
+
+\node[box=cyan!70!black, below=of stage1] (stage2) {
+    \textbf{Stage 2 ---}\\
+    \textbf{BART-large Student}\\
+    LoRA fine-tuning for\\
+    meme text detoxification
+};
+
+\node[box=purple, left=of stage2] (stage3) {
+    \textbf{Stage 3 ---}\\
+    \textbf{Proxy Network}\\
+    CLIP features $\rightarrow$\\
+    BART soft memory\\
+    for cheaper inference
+};
+
+\node[box=red, below=of stage3] (eval) {
+    \textbf{Evaluation}\\
+    Text STA, $\Delta$ toxicity,\\
+    SIM, CLIP, CO$_2$
+};
+
+\draw[arrow] (stage0) -- (stage1);
+\draw[arrow] (stage1) -- (stage2);
+\draw[arrow] (stage2) -- (stage3);
+\draw[arrow] (stage3) -- (eval);
+\draw[optional] (stage0.south) |- (stage3.north);
+
+\end{tikzpicture}
+
+\end{document}

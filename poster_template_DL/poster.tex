@@ -1,0 +1,262 @@
+% Unofficial University of Cambridge Poster Template: https://github.com/andiac/gemini-cam
+% a fork of https://github.com/anishathalye/gemini
+% also refer to https://github.com/k4rtik/uchicago-poster
+
+\documentclass[final]{beamer}
+
+%\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[orientation=portrait,size=a1,scale=1.06]{beamerposter}
+\usetheme{gemini}
+\usecolortheme{nott}
+\usepackage{graphicx}
+\usepackage{anyfontsize}
+\usepackage{amssymb}
+\usepackage[ruled,vlined]{algorithm2e}
+\usepackage{setspace}
+\usepackage{pifont}
+\input{packages}
+\input{macros}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\usepackage{xcolor}
+
+\usepackage{etoolbox}
+\AtBeginEnvironment{algorithm}{\setstretch{1.1}}
+
+% If you have N columns, choose \sepwidth and \colwidth such that
+% (N+1)*\sepwidth + N*\colwidth = \paperwidth.
+\newlength{\sepwidth}
+\newlength{\colwidth}
+\setlength{\sepwidth}{0.025\paperwidth}
+\setlength{\colwidth}{0.45\paperwidth}
+\newcommand{\separatorcolumn}{\begin{column}{\sepwidth}\end{column}}
+
+\setlength{\jot}{15pt}
+\newcommand{\smallgap}{\vspace{0.35em}}
+\newcommand{\tightgap}{\vspace{-0.35em}}
+
+% ====================
+% Title etc
+% ====================
+
+\title{From Censorship to Detoxification:\\Rewriting Harmful Memes}
+
+\author{Alex Dell'Orto, Christian Garzone, Dario Liuzzo}
+
+\institute{Group 31 \samelineand EE-559: Deep Learning, EPFL, 2026}
+
+% use this to include logos on the left and/or right side of the header:
+\logoleft{\begingroup\setlength{\fboxsep}{0.55em}\colorbox{white}{\includegraphics[height=2.65cm]{logos/mints.png}}\endgroup}
+\logoright{\includegraphics[height=7cm]{logos/epfl.png}}
+
+% ====================
+% Doc
+% ====================
+
+\begin{document}
+\begin{frame}[t]
+\begin{columns}[t]
+\separatorcolumn
+
+\begin{column}{\colwidth}
+
+    \begin{block}{Problem definition}
+    Harmful memes combine images and overlaid text to spread offensive content
+    across both online platforms and physical spaces. Existing moderation
+    relies mainly on \textbf{censorship} after exposure: removing, blurring, or
+    suppressing the content.
+
+    \smallgap
+    This project instead proposes \textbf{text detoxification}: rewriting
+    harmful meme text in real time while preserving the core meaning and visual
+    coherence of the original meme. The goal is proactive moderation without
+    erasure, enabling safer message delivery rather than simple deletion.
+
+    \smallgap
+    The research hypothesis is that a large multimodal teacher can explain why
+    a meme is harmful and generate safer pseudo-rewrites, then transfer this
+    context-aware rewriting behavior to a compact BART-large student for
+    efficient deployment.
+    \end{block}
+
+    \begin{block}{Related works}
+    \begin{itemize}
+        \item \textbf{Hateful meme detection.} The dominant literature frames
+        harmful memes as a classification task. The Hateful Memes challenge
+        showed that multimodal fusion models outperform unimodal baselines, and
+        later VisualBERT- and CLIP-based systems further improved image--text
+        reasoning \cite{kiela2020hateful,li2019visualbert,radford2021learning}.
+        These methods detect or remove content, but do not preserve the
+        original communicative intent through rewriting.
+        \item \textbf{Text detoxification and style transfer.} ParaDetox treats
+        toxicity as a style attribute and trains sequence-to-sequence models
+        such as BART/T5 to neutralize toxic sentences \cite{logacheva2022paradetox}.
+        However, plain-text detoxification ignores the image context that often
+        gives meme text its harmful meaning.
+        \item \textbf{Our gap.} We use LLaVA-Next's multimodal understanding as
+        a teacher to produce target groups, visual evidence, implicit meanings,
+        and pseudo-detoxified rewrites \cite{liu2024llava}. These labels are
+        distilled into a lightweight BART-large student, enabling
+        context-aware rewriting at much lower inference cost.
+    \end{itemize}
+    \end{block}
+
+    \begin{block}{Method}
+    \begin{center}
+        \includestandalone[mode=tex,width=0.86\linewidth]{../architecture_diagram}
+    \end{center}
+
+    \tightgap
+    \begin{itemize}
+        \item \textbf{Stage 0:} EasyOCR extracts meme text; CLIP filters
+        non-meme-like images, using stricter negative prompts for MMHS150K.
+        \item \textbf{Stage 1:} LLaVA-Next runs in two sharded passes: first
+        structured hate explanations, then pseudo-detoxified rewrites.
+        \item \textbf{Stage 2:} noisy pseudo-labels are filtered by parse
+        validity, Stage 1 quality checks, positive toxicity reduction, and text
+        quality before LoRA fine-tuning BART-large.
+        \item \textbf{Stage 3:} a proxy MLP maps CLIP image/text features to a
+        short BART encoder-memory sequence, exploring a VLM-free deployment
+        path.
+    \end{itemize}
+
+    \smallgap
+    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.31\linewidth} X}
+        Student & \texttt{facebook/bart-large}, 406M parameters.\\
+        LoRA setup & Rank 32, alpha 64, dropout 0.05; 17M trainable parameters
+        (\(\sim\)4.3\%).\\
+        Conditions & \texttt{full}, \texttt{target\_only},
+        \texttt{visual\_only}, and \texttt{none}.\\
+    \end{tabularx}
+    \end{block}
+
+    \begin{block}{Datasets}
+    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.18\linewidth} X}
+        HarMeme & \(\sim\)3,500 memes related to COVID-19 and US politics,
+        manually labelled as harmful/non-harmful with associated textual claims
+        \cite{pramanick2021harmeme}.\\
+        MAMI & 10,000 misogynist memes from Twitter \cite{fersini2022mami}.\\
+        MMHS150K & \(\sim\)150,000 heterogeneous and noisy Twitter
+        image--text posts \cite{gomez2020multimodal}.\\
+    \end{tabularx}
+
+    \smallgap
+    All datasets are filtered to retain meme-like images only. The final Stage 2
+    supervision contains 3,578 clean pseudo-rewrite pairs from 7,918 loaded
+    LLaVA rows, split into 3,220 train and 358 validation examples. Combining
+    curated and noisy sources exposes the model to diverse toxicity types and
+    improves generalization pressure.
+    \end{block}
+
+\end{column}
+
+\separatorcolumn
+\begin{column}{\colwidth}
+
+    \begin{block}{Validation}
+    \textbf{Quality on 358 validation memes.} Text STA is the mean non-toxic
+    probability from a RoBERTa toxicity classifier; $\Delta$ toxicity is the
+    improvement over the original meme text; SIM is BERTScore F1; CLIP measures
+    image--text alignment.
+
+    \smallgap
+    \begin{center}
+    \small
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.18}
+    \begin{tabular}{lcccc}
+        \toprule
+        System & Text STA & $\Delta$ toxicity & SIM & CLIP\\
+        \midrule
+        LLaVA-Next Teacher & \textbf{0.9517} & \textbf{0.2804} & 0.3938 & 0.6253\\
+        DetoxLLM baseline & 0.8894 & 0.2182 & 0.4202 & 0.6251\\
+        BART-large Full & 0.9261 & 0.2548 & 0.2991 & 0.6236\\
+        Proxy + BART & 0.8084 & 0.1372 & \textbf{0.5527} & \textbf{0.6312}\\
+        \bottomrule
+    \end{tabular}
+    \end{center}
+
+    \smallgap
+    \textbf{Reading the trade-off.} BART-large Full gives the strongest student
+    toxicity reduction and improves over DetoxLLM \cite{hallinan2023detoxllm}
+    on Text STA and $\Delta$ toxicity. DetoxLLM and Proxy + BART preserve more surface
+    similarity, but the proxy currently sacrifices detoxification strength. This
+    matches the project goal: distil a useful portion of LLaVA's multimodal
+    rewriting behavior into a much smaller student.
+
+    \smallgap
+    \textbf{Compute and emissions.}
+    \begin{center}
+    \small
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.13}
+    \begin{tabular}{lccc}
+        \toprule
+        Pipeline component & GPU-time & Energy & CO$_2$\\
+        \midrule
+        Stage 0 -- OCR + CLIP filtering & 2.8 h & 0.76 kWh & 26.7 g\\
+        Stage 1A -- LLaVA explanations & 14.1 h & 6.61 kWh & 230.3 g\\
+        Stage 1B -- LLaVA rewrites & 14.5 h & 5.78 kWh & 201.3 g\\
+        Stage 2 -- BART LoRA training & 2.1 h & 0.82 kWh & 28.4 g\\
+        BART finetuned inference & 12.3 min & 0.04 kWh & 1.5 g\\
+        Proxy inference & 3.4 min & 0.01 kWh & 0.5 g\\
+        \bottomrule
+    \end{tabular}
+    \end{center}
+
+    \smallgap
+    Stage 1 accounts for most emissions because the 7B teacher is used to create
+    pseudo-labels. This is a one-time distillation cost: the deployed BART
+    student is 76.6\(\times\) faster than the LLaVA teacher and
+    16.3\(\times\) faster than DetoxLLM in the repository benchmark.
+
+    \smallgap
+    \begin{center}
+    \begin{tabular}{@{}c@{\hspace{2.6cm}}c@{\hspace{2.6cm}}c@{}}
+        \shortstack{\textbf{+3.67 pts}\\Text STA vs. DetoxLLM} &
+        \shortstack{\textbf{76.6\(\times\)}\\BART speedup vs. LLaVA} &
+        \shortstack{\textbf{496 g}\\total measured CO$_2$}\\
+    \end{tabular}
+    \end{center}
+    \end{block}
+
+    \begin{block}{Limitations}
+    \begin{itemize}
+        \item Dataset noise and heterogeneity remain substantial, especially in
+        MMHS150K.
+        \item The student depends on LLaVA pseudo-labels; filtering improves
+        precision but reduces the training set size.
+        \item BART has limited direct visual grounding at inference time; image
+        context is distilled through text fields rather than consumed as pixels.
+        \item Evaluation is only partially multimodal. VisualBERT scores were
+        difficult to interpret as absolute detoxification metrics in this run.
+        \item The proxy model still shows an unbalanced toxicity--similarity
+        trade-off.
+    \end{itemize}
+    \end{block}
+
+    \begin{block}{Conclusion}
+    This project shows that multimodal supervision from LLaVA-Next can be
+    distilled into a lightweight BART-large student that performs
+    meme-specific text detoxification: it reduces toxicity while preserving
+    semantic alignment and image--text coherence.
+
+    \smallgap
+    The result supports a shift from reactive censorship to constructive
+    rewriting. Future work should improve dataset quality, strengthen direct
+    multimodal grounding, and integrate OCR plus inpainting modules for live
+    rewriting of harmful text in video streams and real-world physical
+    environments.
+    \end{block}
+
+    \begin{block}{References}
+        \scriptsize{\bibliographystyle{unsrt}\bibliography{poster}}
+    \end{block}
+
+\end{column}
+\separatorcolumn
+
+\end{columns}
+\end{frame}
+\end{document}
