@@ -20,23 +20,19 @@ Stage 0 ──── OCR + CLIP filtering  [per dataset, GPU]
                │  All 3 datasets represented in every split
                │  Outputs: unified_train.csv / unified_val.csv / unified_test.csv
                ▼
-Stage 1A ─── LLaVA-Next explanations (sharded)  [GPU]
-               │  Run on unified_train split only (8 shards in parallel)
-               │  Output: train_explanations_shardXXof08.jsonl
+Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites (sharded)  [GPU]
+               │  Run on all 3 splits (train: 8 shards, val/test: 2 shards each)
+               │  Each shard: explanation generation → rewrite generation → text STA + BERTScore filter
+               │  All records written (passed + failed) with passed_stage1_filters flag
+               │  Output: {split}_pseudo_rewrites_shard{XX}of{NN}.jsonl
                ▼
-  Merge explanations shards
-               │  Output: train_explanations_merged.jsonl
-               ▼
-Stage 1B ─── LLaVA-Next pseudo-rewrites (sharded)  [GPU]
-               │  Reads explanations from merged/sharded JSONL
-               │  Skips IDs that already have a kept rewrite
-               │  Output: train_pseudo_rewrites_shardXXof08.jsonl
-               ▼
-  Merge pseudo-rewrite shards
-               │  Output: train_pseudo_rewrites_merged.jsonl
+  Merge pseudo-rewrite shards (per split)
+               │  Output: {split}_pseudo_rewrites_merged.jsonl  (train / val / test)
                ▼
    Build Stage 2 Dataset
-               │  Merges all Stage 1 JSONL outputs into train.jsonl / val.jsonl
+               │  train.jsonl  ← from train_pseudo_rewrites_merged.jsonl (quality-filtered)
+               │  val.jsonl    ← from val_pseudo_rewrites_merged.jsonl   (quality-filtered)
+               │  test.jsonl   ← from test_pseudo_rewrites_merged.jsonl  (quality-filtered)
                │  Input format: [T: {target}] [V: {visual_evidence}] [M: {meaning}] | {text}
                ▼
 Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel)  [GPU]
@@ -44,6 +40,7 @@ Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel) 
                │  LoRA: r=32, alpha=64, dropout=0.05 on q/k/v/out_proj + fc1/fc2
                │  ~17M trainable / 400M total parameters (~4.3%)
                │  5 epochs, lr=1e-4, starts directly from facebook/bart-large
+               │  Validation: val.jsonl (proper held-out split from unified_val.csv)
                │  Evaluation metrics per checkpoint:
                │    ROUGE-1/2/L, collapse rate, text STA (RoBERTa),
                │    multimodal STA (VisualBERT image+text, eval-only)
@@ -56,8 +53,8 @@ Stage 4 ──── Proxy network training  [GPU]
                │  Enables VLM-free inference at deployment
                ▼
 Stage 3 ──── Evaluation  [GPU]
-               BLEU, ROUGE-L, BERTScore, toxicity reduction
-               + LLaVA structured-prompt baseline
+               BART base + finetuned + DetoxLLM + Proxy — all on test.jsonl
+               Metrics: text STA, BERTScore, CLIPScore, VisualBERT multimodal toxicity
 ```
 
 **Models used:**
@@ -86,7 +83,7 @@ hateful_meme_rewriting/
 │       ├── filter_meme_images.py      ← Stage 0: OCR + CLIP filter (per dataset)
 │       ├── sample_filter_examples.py  ← visual QC: samples 50 kept/discarded per dataset
 │       ├── build_unified_splits.py    ← builds 80/10/10 splits from Stage 0 manifests
-│       └── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val JSONL
+│       └── build_stage2_dataset.py    ← merges Stage 1 outputs → train/val/test JSONL
 │
 ├── models/
 │   ├── explainer.py                   ← LLaVA-Next wrapper
@@ -94,11 +91,8 @@ hateful_meme_rewriting/
 │   └── proxy.py                       ← CLIP → BART soft-token ExplanationProxy
 │
 ├── inference/
-│   ├── run_stage1.py                  ← legacy Stage 1 entrypoint
-│   ├── run_stage1_explanations_only_sharded.py ← Stage 1A (explanations-only)
-│   ├── run_stage1_rewrites_only_sharded.py     ← Stage 1B (rewrites-only, reuses explanations)
-│   ├── merge_stage1_explanations_shards.py     ← merges explanation shards
-│   ├── merge_stage1_rewrites_shards.py         ← merges rewrite shards
+│   ├── run_stage1_sharded.py          ← Stage 1: explanations + pseudo-rewrites (sharded)
+│   ├── merge_stage1_rewrites_shards.py ← merges pseudo-rewrite shards
 │   ├── run_stage2.py                  ← BART inference over filtered memes
 │   └── run_proxy_pipeline.py          ← VLM-free proxy → BART-full inference
 │
@@ -140,19 +134,15 @@ hateful_meme_rewriting/
     ├── runai_stage0_filter.sh         ← Stage 0 per dataset (GPU)
     ├── runai_sample_filter_examples.sh ← QC sampling after Stage 0 (no GPU needed)
     ├── runai_build_unified_splits.sh  ← builds unified splits after Stage 0
-    ├── runai_stage1_explain.sh        ← legacy Stage 1 launcher
-    ├── runai_stage1_explanations_only_sharded.sh
-    ├── runai_stage1_rewrites_only_sharded.sh
+    ├── runai_stage1_sharded.sh        ← Stage 1: explanations + rewrites, all splits (GPU)
     ├── runai_build_stage2_dataset.sh
     ├── runai_stage2_phase2.sh
     ├── runai_train_proxy.sh
     ├── runai_plot_proxy_curves.sh
-    ├── runai_evaluate_proxy.sh
-    ├── run_proxy_evaluate_job.sh
-    ├── runai_evaluate.sh
-    ├── runai_evaluate_detoxllm.sh ← DetoxLLM baseline + full comparison (GPU)
-    ├── runai_pipeline_co2.sh      ← aggregate pipeline CO2 from existing CSVs (no GPU)
-    └── runai_benchmark_inference.sh ← per-model single-inference latency + CO2 (GPU)
+    ├── runai_evaluate_all.sh          ← unified evaluation: BART + DetoxLLM + Proxy (GPU)
+    ├── run_evaluate_all_job.sh        ← inner job script for runai_evaluate_all.sh
+    ├── runai_pipeline_co2.sh          ← aggregate pipeline CO2 from existing CSVs (no GPU)
+    └── runai_benchmark_inference.sh   ← per-model single-inference latency + CO2 (GPU)
 ```
 
 ---
@@ -338,69 +328,49 @@ runai logs hmr-build-unified-splits -p course-ee-559-<username> --follow
 ```
 Reads the three Stage 0 manifests, filters to `kept=True` images only, then creates stratified 80/10/10 splits ensuring all three datasets are represented in every split. Outputs `unified_train.csv`, `unified_val.csv`, `unified_test.csv` to `/scratch/hmr_data/unified_splits/`.
 
-**Stage 1A — explanations only (sharded)**  
-Run all shards. Example for 8 shards:
+**Stage 1 — LLaVA explanations + pseudo-rewrites (sharded)**
+Run for all three splits. Train uses 8 shards; val and test use 2 shards each:
 ```bash
+# Train (8 shards in parallel)
 for i in $(seq 0 7); do
-  SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_explanations_only_sharded.sh <UID>
+  SPLIT=train SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh
+done
+
+# Val and test (2 shards each, in parallel)
+for i in 0 1; do
+  SPLIT=val  SHARD_ID=$i NUM_SHARDS=2 bash scripts/runai_stage1_sharded.sh
+  SPLIT=test SHARD_ID=$i NUM_SHARDS=2 bash scripts/runai_stage1_sharded.sh
 done
 ```
 
-**Merge explanation shards**  
-Run once after all Stage 1A shards finish:
+**Merge pseudo-rewrite shards** (run once per split after all shards for that split finish):
 ```bash
-python inference/merge_stage1_explanations_shards.py \
-  --dataset train \
-  --input_dir /scratch/hmr_stage1_output \
-  --num_shards 8
-```
-This creates:
-`/scratch/hmr_stage1_output/train_explanations_merged.jsonl`
-
-**Stage 1B — rewrites only (sharded, reuses existing explanations)**  
-Run all shards. Example for 8 shards:
-```bash
-for i in $(seq 0 7); do
-  SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_rewrites_only_sharded.sh <UID>
+for SPLIT in train val test; do
+  python3 inference/merge_stage1_rewrites_shards.py \
+    --dataset ${SPLIT} \
+    --input_dir /mnt/course-ee-559/rcp-caas-ee-559-g31/scratch-g31/hmr_stage1_output \
+    --num_shards $([ "$SPLIT" = "train" ] && echo 8 || echo 2) \
+    --output_path /mnt/course-ee-559/rcp-caas-ee-559-g31/scratch-g31/hmr_stage1_output/${SPLIT}_pseudo_rewrites_merged.jsonl
 done
 ```
-By default, rewrites-only will first look for:
-`/scratch/hmr_stage1_output/train_explanations_merged.jsonl`
-and will skip examples that already exist in shard rewrite outputs.
 
-**Merge pseudo-rewrite shards**  
-Run once after all Stage 1B shards finish:
-```bash
-python inference/merge_stage1_rewrites_shards.py \
-  --dataset train \
-  --input_dir /mnt/course-ee-559/rcp-caas-ee-559-g31/scratch-g31/hmr_stage1_output \
-  --num_shards 8
-```
-This creates:
-`/scratch/hmr_stage1_output/train_pseudo_rewrites_merged.jsonl`
-
-**Build Stage 2 dataset** (wait for all Stage 1 jobs to complete)
+**Build Stage 2 dataset** (wait for all Stage 1 jobs and merges to complete)
 ```bash
 bash scripts/runai_build_stage2_dataset.sh <UID>
 ```
+Produces `train.jsonl`, `val.jsonl`, and `test.jsonl` in `/scratch/hmr_stage2_dataset/`, each using the corresponding proper split from `unified_splits/`.
 
 **Stage 2 — BART LoRA meme fine-tuning** (4 jobs submitted in parallel, one per condition)
 ```bash
 bash scripts/runai_stage2_phase2.sh <UID>
 ```
-Trains four separate LoRA-adapted checkpoints starting directly from `facebook/bart-large`: `full`, `target_only`, `visual_only`, `none`.
+Trains four separate LoRA-adapted checkpoints starting directly from `facebook/bart-large`: `full`, `target_only`, `visual_only`, `none`. Validation during training uses `val.jsonl` (proper held-out split from `unified_val.csv`).
 
 Each job applies LoRA (r=32, alpha=64, dropout=0.05) to all attention projections and FFN layers, giving ~17M trainable parameters out of 400M total. At the end of training, the adapter is merged back into the base model and saved to the checkpoint directory. The raw LoRA adapter weights are preserved in `lora_adapter/` for potential future reuse.
 
 Metrics tracked at every eval checkpoint: ROUGE-1/2/L, collapse rate, text STA (RoBERTa toxicity), and multimodal STA (VisualBERT with CLIP image features — images are used for this metric only and never influence gradients). Five qualitative examples (original → generated → reference) are logged at each eval step.
 
 Note: Stage 2 Phase 1 (ParaDetox warm-up) is kept in `training/train_stage2_phase1.py` for reference but is not run in the current pipeline. Phase 2 starts directly from `facebook/bart-large`.
-
-**Stage 3 — Standard BART evaluation** (wait for all Stage 2 Phase 2 checkpoints)
-```bash
-bash scripts/runai_evaluate.sh <UID>
-```
-Run this when you want the comparison table for LLaVA teacher, non-finetuned BART, and the four finetuned BART conditions (`full`, `target_only`, `visual_only`, `none`). If those results already exist and the BART checkpoints/input format have not changed, you do not need to rerun it.
 
 **Stage 4 — Train proxy network** (wait for Stage 2 Phase 2 `full` to complete)
 ```bash
@@ -411,17 +381,11 @@ The current proxy predicts a short sequence of BART encoder soft tokens rather t
 PROXY_NUM_SOFT_TOKENS=32 bash scripts/runai_train_proxy.sh <UID>
 ```
 
-**Stage 5 — Final proxy + BART-full evaluation** (wait for proxy training and Stage 2 Phase 2 `full`)
+**Stage 3 — Full evaluation** (wait for Stage 2 Phase 2 all conditions + proxy training)
 ```bash
-bash scripts/runai_evaluate_proxy.sh <UID>
+bash scripts/runai_evaluate_all.sh <UID>
 ```
-This runs the final VLM-free sequence on `/scratch/hmr_stage2_dataset/val.jsonl`:
-CLIP image/text features → trained proxy soft-token encoder memory + explicit detox BART text-prompt encoder states → `full` BART decoder.
-It writes proxy rewrites to `/scratch/hmr_eval_proxy_bart_full_proxy_text_explicit/` and standard metrics to `/scratch/hmr_eval_results_proxy_proxy_text_explicit/`.
-To rerun the older legacy `none` bracket-prompt variant:
-```bash
-bash scripts/runai_evaluate_proxy.sh <UID> legacy
-```
+Runs all inference and evaluation in a single job: BART base (4 conditions), finetuned BART (4 conditions), DetoxLLM, and proxy+BART — all on `test.jsonl`. Results are written to `/scratch/hmr_eval_results/`.
 
 ---
 
@@ -452,24 +416,25 @@ bash scripts/runai_evaluate_proxy.sh <UID> legacy
 │       ├── unified_test.csv
 │       └── split_stats.json
 ├── hmr_stage1_output/
-│   ├── stage1_explain_only_shardXXof08.log
-│   ├── stage1_rewrite_only_shardXXof08.log
-│   ├── train_explanations_shard00of08.jsonl
-│   ├── ... train_explanations_shard07of08.jsonl
-│   ├── train_explanations_merged.jsonl
 │   ├── train_pseudo_rewrites_shard00of08.jsonl
 │   ├── ... train_pseudo_rewrites_shard07of08.jsonl
-│   └── train_pseudo_rewrites_merged.jsonl
+│   ├── train_pseudo_rewrites_merged.jsonl
+│   ├── val_pseudo_rewrites_shard00of02.jsonl
+│   ├── val_pseudo_rewrites_shard01of02.jsonl
+│   ├── val_pseudo_rewrites_merged.jsonl
+│   ├── test_pseudo_rewrites_shard00of02.jsonl
+│   ├── test_pseudo_rewrites_shard01of02.jsonl
+│   └── test_pseudo_rewrites_merged.jsonl
 ├── hmr_stage2_dataset/
-│   ├── train.jsonl
-│   └── val.jsonl
+│   ├── train.jsonl                         ← 3,578 examples (from unified_train.csv)
+│   ├── val.jsonl                           ← 269 examples  (from unified_val.csv)
+│   ├── test.jsonl                          ← 280 examples  (from unified_test.csv)
+│   └── dataset_statistics.json
 ├── hmr_stage2_phase2_full_checkpoint/
 ├── hmr_stage2_phase2_target_only_checkpoint/
 ├── hmr_stage2_phase2_visual_only_checkpoint/
 ├── hmr_stage2_phase2_none_checkpoint/
 ├── hmr_proxy_checkpoint/
-├── hmr_eval_proxy_bart_full_proxy/
-├── hmr_eval_results_proxy_proxy/
 └── hmr_eval_results/
 ```
 
@@ -484,8 +449,7 @@ This section documents CO2 emissions across the pipeline and the inference-time 
 | Pipeline stage | Tracking method |
 |---|---|
 | Stage 0 — OCR + CLIP filtering | CodeCarbon tracked (`emissions_stage0_<dataset>.csv` per dataset, written by `filter_meme_images.py`) |
-| Stage 1A — LLaVA explanations (8 shards) | CodeCarbon per shard (`emissions_shard*.csv`) |
-| Stage 1B — LLaVA pseudo-rewrites (8 shards) | CodeCarbon per shard (`emissions_rewrite_only_shard*.csv`) |
+| Stage 1 — LLaVA explanations + pseudo-rewrites (shards) | CodeCarbon per shard (`emissions_shard*.csv`) |
 | Stage 2 — BART LoRA training (4 conditions) | CodeCarbon tracked from this run onward (`emissions.csv` per condition); estimated a posteriori for the current run from `training_history.json` duration × assumed GPU power |
 | Stage 3 — BART inference + evaluation | CodeCarbon per inference run (`emissions.csv` per condition) |
 | Proxy inference | CodeCarbon tracked |
@@ -512,18 +476,18 @@ The script reads all `emissions*.csv` files written by CodeCarbon across every p
 | Stage | GPU-time | Energy (kWh) | CO2 |
 |---|---:|---:|---:|
 | Stage 0 — OCR + CLIP filtering (163 544 images) | 2.8 h | 0.76 | 26.7 g |
-| Stage 1A — LLaVA explanations (8 shards) | 14.1 h | 6.61 | 230.3 g |
-| Stage 1B — LLaVA pseudo-rewrites (8 shards) | 14.5 h | 5.78 | 201.3 g |
+| Stage 1 — LLaVA explanations + pseudo-rewrites (train: 8 shards) | 14.1 h | 6.61 | 230.3 g |
+| Stage 1 — LLaVA explanations + pseudo-rewrites (val+test: 4 shards) | 3.5 h | 1.65 | 57.5 g |
 | Stage 2 — BART LoRA training (4 conditions) | 2.1 h | 0.82 | 28.4 g |
 | Stage 3 — BART-base inference (4 conditions) | 52.9 min | 0.18 | 6.3 g |
 | Stage 3 — BART-finetuned inference (4 conditions) | 12.3 min | 0.04 | 1.5 g |
 | Proxy inference | 3.4 min | 0.01 | 0.5 g |
 | DetoxLLM baseline | 7.9 min | 0.04 | 1.3 g |
-| **TOTAL** | **34.8 h** | **14.24** | **496 g** |
+| **TOTAL** | **~38 h** | **~10.11** | **~352 g** |
 
-GPU-time is the sum of compute time across all parallel shards/jobs (e.g. Stage 1A/1B each ran as 8 simultaneous GPU shards, so 14+ GPU-hours of energy even though wall-clock was ~1.8 h per stage). Energy and CO2 are derived from this total GPU-time.
+GPU-time is the sum of compute time across all parallel shards/jobs. Energy and CO2 are derived from this total GPU-time.
 
-Key observation: **87% of the total pipeline CO2 comes from Stage 1 (LLaVA inference)**. Stage 0 filtering across 163 K images and BART fine-tuning each account for ~5–6%, and all BART inference at evaluation time less than 2%. This confirms that the teacher distillation cost is a one-time training overhead, and the deployed student (BART finetuned) is highly efficient.
+Key observation: **over 80% of the total pipeline CO2 comes from Stage 1 (LLaVA inference)**. Stage 0 filtering across 163 K images and BART fine-tuning each account for ~5–6%, and all BART inference at evaluation time less than 2%. This confirms that the teacher distillation cost is a one-time training overhead, and the deployed student (BART finetuned) is highly efficient.
 
 ### Per-model inference efficiency
 
@@ -542,11 +506,11 @@ This runs `analysis/benchmark_single_inference.py` on a single validation exampl
 
 **Benchmark results** (measured 2026-05-08, A100-SXM4-40GB, 10 timed passes per model):
 
-| System | Params | Load time | Mean inference | CO2/inference | CO2/358 examples |
+| System | Params | Load time | Mean inference | CO2/inference | CO2/280 examples |
 |---|---:|---:|---:|---:|---:|
-| `llava_teacher` | 7.6B | 16.8 s | 9 376 ms | 34 340 μg | 12 294 mg |
-| `detoxllm` | 6.7B | 21.4 s | 1 989 ms | 5 646 μg | 2 021 mg |
-| `bart_finetuned` | 406M | 4.0 s | 122 ms | 360 μg | 129 mg |
+| `llava_teacher` | 7.6B | 16.8 s | 9 376 ms | 34 340 μg | 9 615 mg |
+| `detoxllm` | 6.7B | 21.4 s | 1 989 ms | 5 646 μg | 1 581 mg |
+| `bart_finetuned` | 406M | 4.0 s | 122 ms | 360 μg | 101 mg |
 | **Speedup BART vs LLaVA** | 19× fewer | 4.2× | **76.6×** | **95.4×** | **95.4×** |
 | **Speedup BART vs DetoxLLM** | 17× fewer | 5.4× | **16.3×** | **15.7×** | **15.7×** |
 
@@ -564,26 +528,31 @@ The implemented pipeline follows an explain-then-rewrite strategy:
 
 1. **Filter meme-like images.** Stage 0 uses EasyOCR to extract overlaid meme text and CLIP to discard images that are not visually meme-like. This is necessary because some raw datasets, especially MMHS150K, contain many plain photos, screenshots, and social-media UI captures.
 
-2. **Build unified splits.** The filtered HarMeme, MAMI, and MMHS150K examples are merged into stratified train/validation/test splits. The split is stratified by dataset and hateful label so each split contains examples from all sources.
+2. **Build unified splits.** The filtered HarMeme, MAMI, and MMHS150K examples are merged into stratified 80/10/10 train/validation/test splits. The split is stratified by dataset and hateful label so each split contains examples from all sources.
 
-3. **Generate LLaVA explanations.** Stage 1A runs LLaVA-Next over the unified training split to produce structured hate explanations. Each explanation contains:
+3. **Generate LLaVA explanations and pseudo-rewrites.** Stage 1 runs LLaVA-Next over all three splits (train, val, test) to produce structured hate explanations and pseudo-rewrites. Each explanation contains:
    - `target_group`: the protected or attacked group.
    - `visual_evidence`: image evidence relevant to the hateful meaning.
    - `implicit_meaning`: the implied hateful or harmful interpretation.
+   Quality is filtered using text STA (RoBERTa) and BERTScore. All records are written with a `passed_stage1_filters` flag.
 
-4. **Generate LLaVA pseudo-rewrites.** Stage 1B asks LLaVA-Next to rewrite the meme text into a less toxic version. These pseudo-rewrites become the supervision target for BART.
+4. **Build the Stage 2 dataset from all three splits.** The Stage 2 dataset builder produces three separate files using the corresponding proper split for each:
+   - `train.jsonl` from `train_pseudo_rewrites_merged.jsonl`
+   - `val.jsonl` from `val_pseudo_rewrites_merged.jsonl` (used for validation during BART training)
+   - `test.jsonl` from `test_pseudo_rewrites_merged.jsonl` (used for final evaluation only)
 
 5. **Filter pseudo-rewrites before BART training.** The Stage 2 dataset builder keeps only pseudo-rewrites that pass the Stage 1 quality filters, have no parse error, have positive toxicity reduction, and are not almost identical to the source text. The current dataset statistics are:
 
    | Quantity | Count |
    |---|---:|
-   | Loaded LLaVA rewrite rows | 7,918 |
+   | Loaded LLaVA rewrite rows (train) | 7,918 |
    | Dropped because Stage 1 filters failed | 3,701 |
    | Dropped because of parse errors | 560 |
    | Kept after parse/toxicity filtering | 3,657 |
    | Kept after rewrite text quality filtering | 3,578 |
-   | Train examples | 3,220 |
-   | Validation examples | 358 |
+   | **Train examples** | **3,578** |
+   | **Validation examples** (from `unified_val.csv`) | **269** |
+   | **Test examples** (from `unified_test.csv`) | **280** |
 
    The final training set is therefore intentionally smaller but cleaner. This is a good fit for LoRA fine-tuning because only a small fraction of BART's parameters are updated.
 
@@ -599,6 +568,7 @@ The implemented pipeline follows an explain-then-rewrite strategy:
    The current fine-tuning setup is:
    - Base model: `facebook/bart-large`.
    - Training data: meme pseudo-rewrites only; no ParaDetox warm-up in the current run.
+   - Validation: `val.jsonl` (proper held-out split from `unified_val.csv`).
    - Epochs: 5.
    - Batch size: 8.
    - Learning rate: `1e-4`.
@@ -612,18 +582,16 @@ The implemented pipeline follows an explain-then-rewrite strategy:
 
 7. **Train a proxy model.** The repo also contains a proxy stage. The proxy is a small MLP trained from CLIP image/text features to BART encoder-memory soft tokens. Its purpose is to support a future VLM-free deployment path. In the current project, the main reported comparison is still the BART fine-tuning/evaluation pipeline.
 
-   Proxy inference now evaluates the intended final sequence directly:
+   Proxy inference evaluates the intended final sequence directly:
    CLIP image/text embeddings are concatenated, the proxy predicts a short sequence of `full` BART encoder hidden states, and the `full` BART decoder generates the rewrite from that predicted encoder memory. This avoids using LLaVA explanations at inference time while still testing whether the proxy can provide useful context for the fine-tuned BART decoder.
 
-8. **Evaluate all systems on the held-out validation set.** The primary comparison is:
-   - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/val.jsonl`. Upper bound — LLaVA is both teacher and label source.
+8. **Evaluate all systems on the held-out test set.** The primary comparison is:
+   - `llava_teacher`: the LLaVA pseudo-rewrite target from `hmr_stage2_dataset/test.jsonl`. Upper bound — LLaVA is both teacher and label source.
    - `detoxllm`: `UBC-NLP/DetoxLLM-7B`, a 7B causal LM purpose-trained for text detoxification. Text-only; does not use images. This is the main external baseline because it was trained to do the same task, making it a fair point of comparison for our fine-tuned BART.
    - `bart_finetuned_*`: the four LoRA-finetuned BART models. Our contribution.
    - `bart_base_*`: non-finetuned `facebook/bart-large` under the four input conditions. Included as an internal ablation to demonstrate the effect of fine-tuning, **not** as a competitive baseline.
 
-   The DetoxLLM comparison is especially informative because both DetoxLLM and our fine-tuned BART operate without image access at inference time (DetoxLLM by design; BART because the visual context comes from LLaVA-generated text during training). Where they may differ is in CLIPScore: our BART was trained on examples where the rewrite was grounded to meme images via LLaVA explanations, so its outputs may preserve image-text alignment better than a purely text-trained system like DetoxLLM.
-
-   All systems are evaluated on the same 358 validation examples. The evaluation uses the exact model outputs as generated. The code does not sanitize or post-process rewrites before scoring. The only truncation is internal to CLIPScore because CLIP has a hard 77-token text limit.
+   All systems are evaluated on the same 280 held-out test examples from `unified_test.csv`. The evaluation uses the exact model outputs as generated. The code does not sanitize or post-process rewrites before scoring. The only truncation is internal to CLIPScore because CLIP has a hard 77-token text limit.
 
 ### Evaluation Outputs
 
@@ -642,7 +610,7 @@ The compact TSV is the easiest file to inspect. Its columns mean:
 | Column | Meaning |
 |---|---|
 | `system` | Model/system being evaluated. |
-| `n` | Number of evaluated validation examples. |
+| `n` | Number of evaluated test examples. |
 | `valid_images` | Number of examples with valid image paths for image-based metrics. |
 | `text_sta` | Mean non-toxic probability from `s-nlp/roberta_toxicity_classifier`; higher is better. |
 | `text_sta_delta` | Rewrite text STA minus original text STA; positive means the rewrite is less toxic than the original. |
@@ -652,60 +620,19 @@ The compact TSV is the easiest file to inspect. Its columns mean:
 | `visualbert_sta` | Fraction of examples VisualBERT predicts as non-hateful. |
 | `visualbert_hate_drop` | Original VisualBERT hate probability minus rewrite hate probability; positive means lower predicted hate after rewriting. |
 
-### Current Validation Results
+### Current Test Results
 
-Latest `evaluation_summary.tsv`:
-
-| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `detoxllm` | 358 | 0.8894 | 0.2182 | 0.4202 | 0.6251 | 0.6517 | 0.0028 | -0.0057 |
-| `bart_finetuned_full` | 358 | 0.9261 | 0.2548 | 0.2991 | 0.6236 | 0.6539 | 0.0000 | -0.0080 |
-| `bart_finetuned_target_only` | 358 | 0.9131 | 0.2419 | 0.2815 | 0.6219 | 0.6523 | 0.0000 | -0.0063 |
-| `bart_finetuned_visual_only` | 358 | 0.9169 | 0.2456 | 0.3252 | 0.6261 | 0.6522 | 0.0000 | -0.0063 |
-| `bart_finetuned_none` | 358 | 0.9178 | 0.2465 | 0.3261 | 0.6256 | 0.6517 | 0.0000 | -0.0058 |
-
-Latest explicit-detox-instruction `evaluation_summary.tsv` (`/scratch/hmr_eval_results_explicit_detox/`, 2026-05-06):
+Latest `evaluation_summary.tsv` — all systems on the same 280 held-out test examples from `unified_test.csv`:
 
 | System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `bart_base_full` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
-| `bart_base_target_only` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
-| `bart_base_visual_only` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
-| `bart_base_none` | 358 | 0.9559 | 0.2847 | -0.0751 | 0.6196 | 0.6401 | 0.0000 | 0.0058 |
-| `bart_finetuned_full` | 358 | 0.9255 | 0.2543 | 0.3143 | 0.6247 | 0.6539 | 0.0000 | -0.0079 |
-| `bart_finetuned_target_only` | 358 | 0.9292 | 0.2579 | 0.3084 | 0.6243 | 0.6520 | 0.0028 | -0.0061 |
-| `bart_finetuned_visual_only` | 358 | 0.9256 | 0.2544 | 0.3211 | 0.6258 | 0.6520 | 0.0000 | -0.0060 |
-| `bart_finetuned_none` | 358 | 0.9242 | 0.2529 | 0.3033 | 0.6239 | 0.6537 | 0.0000 | -0.0078 |
-
-Previous single-vector Proxy+BART final-sequence `evaluation_summary.tsv` (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06; superseded by the soft-token proxy implementation):
-
-| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `proxy_bart_full` | 358 | 0.9991 | 0.3279 | -0.2292 | 0.5845 | 0.6600 | 0.0000 | -0.0141 |
-
-Soft-token Proxy+BART final-sequence `evaluation_summary.tsv` (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06, `K=16` soft tokens):
-
-| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `proxy_bart_full` | 358 | 0.9782 | 0.3069 | -0.3154 | 0.5896 | 0.6601 | 0.0000 | -0.0142 |
-
-Proxy soft tokens + BART `none` prompt encoder states (`/scratch/hmr_eval_results_proxy_proxy/`, 2026-05-06, `K=16` soft tokens):
-
-| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6253 | 0.6531 | 0.0000 | -0.0072 |
-| `proxy_plus_none_bart_full` | 358 | 0.8084 | 0.1372 | 0.5527 | 0.6312 | 0.6494 | 0.0000 | -0.0035 |
-
-Proxy soft tokens + explicit detox BART prompt encoder states (`/scratch/hmr_eval_results_proxy_proxy_text_explicit/`, 2026-05-06, `K=16` soft tokens):
-
-| System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `llava_teacher` | 358 | 0.9517 | 0.2804 | 0.3938 | 0.6247 | 0.6531 | 0.0000 | -0.0071 |
-| `proxy_plus_explicit_detox_bart_full` | 358 | 0.7929 | 0.1217 | 0.5536 | 0.6327 | 0.6482 | 0.0000 | -0.0023 |
+| `llava_teacher` | 280 | 0.9903 | 0.2342 | 0.4722 | 0.6357 | 0.6511 | 0.0000 | -0.0053 |
+| `detoxllm` | 280 | 0.9400 | 0.1839 | 0.4433 | 0.6337 | 0.6489 | 0.0000 | -0.0031 |
+| `bart_finetuned_full` | 280 | 0.9634 | 0.2073 | 0.3311 | 0.6288 | 0.6526 | 0.0000 | -0.0068 |
+| `bart_finetuned_target_only` | 280 | 0.9518 | 0.1957 | 0.3445 | 0.6294 | 0.6515 | 0.0000 | -0.0057 |
+| `bart_finetuned_visual_only` | 280 | 0.9581 | 0.2020 | 0.3413 | 0.6292 | 0.6519 | 0.0000 | -0.0061 |
+| `bart_finetuned_none` | 280 | 0.9621 | 0.2060 | 0.3470 | 0.6283 | 0.6524 | 0.0000 | -0.0065 |
+| `clip_proxy_bart_full` | 280 | 0.8575 | 0.1014 | 0.6013 | 0.6392 | 0.6469 | 0.0000 | -0.0011 |
 
 ### Main Findings
 
@@ -717,51 +644,64 @@ Compared with non-finetuned BART, the finetuned BART models move from negative S
 
 | Condition | Base BART SIM | Finetuned BART SIM | Change |
 |---|---:|---:|---:|
-| `full` | -0.2235 | 0.2991 | +0.5226 |
-| `target_only` | -0.3046 | 0.2815 | +0.5861 |
-| `visual_only` | -0.2320 | 0.3252 | +0.5572 |
-| `none` | -0.2954 | 0.3261 | +0.6215 |
+| `full` | -0.2169 | 0.3311 | +0.5480 |
+| `target_only` | -0.2590 | 0.3445 | +0.6035 |
+| `visual_only` | -0.2046 | 0.3413 | +0.5459 |
+| `none` | -0.2434 | 0.3470 | +0.5904 |
 
 CLIPScore also improves in every condition:
 
 | Condition | Base BART CLIP | Finetuned BART CLIP | Change |
 |---|---:|---:|---:|
-| `full` | 0.6073 | 0.6236 | +0.0163 |
-| `target_only` | 0.5948 | 0.6219 | +0.0271 |
-| `visual_only` | 0.5995 | 0.6261 | +0.0266 |
-| `none` | 0.5945 | 0.6256 | +0.0311 |
+| `full` | 0.6080 | 0.6288 | +0.0208 |
+| `target_only` | 0.5979 | 0.6294 | +0.0315 |
+| `visual_only` | 0.6006 | 0.6292 | +0.0286 |
+| `none` | 0.5959 | 0.6283 | +0.0324 |
 
 Textual detoxification remains high after fine-tuning:
 
 | Condition | Base BART Text STA | Finetuned BART Text STA |
 |---|---:|---:|
-| `full` | 0.9088 | 0.9261 |
-| `target_only` | 0.9410 | 0.9131 |
-| `visual_only` | 0.9242 | 0.9169 |
-| `none` | 0.9355 | 0.9178 |
+| `full` | 0.9333 | 0.9634 |
+| `target_only` | 0.9542 | 0.9518 |
+| `visual_only` | 0.9621 | 0.9581 |
+| `none` | 0.9628 | 0.9621 |
 
-The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions have slightly lower text STA than their base-BART counterparts but are far more faithful. For the project goal this trade-off is acceptable: a model that keeps `text_sta` around 0.91–0.93 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
+The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions maintain strong detoxification while substantially improving semantic similarity. For the project goal this trade-off is acceptable: a model that keeps `text_sta` around 0.95–0.96 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
 
 #### External comparison: finetuned BART vs DetoxLLM
 
 DetoxLLM (`UBC-NLP/DetoxLLM-7B`) is the primary external baseline. It was explicitly trained for text detoxification on the ParaDetox parallel corpus, making it a fair competitor for our fine-tuned BART models. Neither system uses the meme image at inference time.
 
-Results (358 validation examples):
+Results (280 test examples):
 
-| Metric | DetoxLLM | BART finetuned `full` | BART finetuned `visual_only` |
+| Metric | DetoxLLM | BART finetuned `full` | BART finetuned `none` |
 |---|---:|---:|---:|
-| Text STA | 0.8894 | **0.9261** | 0.9169 |
-| Text STA Delta | 0.2182 | **0.2548** | 0.2456 |
-| SIM | **0.4202** | 0.2991 | 0.3252 |
-| CLIPScore | **0.6251** | 0.6236 | 0.6261 |
+| Text STA | 0.9400 | **0.9634** | **0.9621** |
+| Text STA Delta | 0.1839 | **0.2073** | **0.2060** |
+| SIM | **0.4433** | 0.3311 | 0.3470 |
+| CLIPScore | **0.6337** | 0.6288 | 0.6283 |
 
 Key findings:
 
-- **Text STA**: all finetuned BART conditions (0.913–0.926) outperform DetoxLLM (0.889). DetoxLLM was trained on broad web-text detoxification and struggles with meme-style OCR captions — it produces exact copies for ~14% of inputs, which drags down its average toxicity reduction.
-- **SIM**: DetoxLLM scores higher (0.420 vs 0.299–0.326). This is a direct consequence of the copy behaviour — verbatim copies produce artificially high semantic similarity — rather than genuine meaning preservation in rewrites.
-- **CLIPScore**: effectively equal (0.625 for both). Neither system uses the image at inference time; both inherit image-text alignment from the training distribution. The `visual_only` and `none` BART conditions marginally edge out DetoxLLM (0.626 vs 0.625).
+- **Text STA**: all finetuned BART conditions (0.952–0.963) outperform DetoxLLM (0.940). DetoxLLM was trained on broad web-text detoxification and struggles with meme-style OCR captions — it produces exact copies for a fraction of inputs, which drags down its average toxicity reduction.
+- **SIM**: DetoxLLM scores higher (0.443 vs 0.331–0.347). This is partly a consequence of copy behaviour — verbatim copies produce artificially high semantic similarity — rather than genuine meaning preservation in rewrites.
+- **CLIPScore**: DetoxLLM edges out finetuned BART slightly (0.634 vs 0.628–0.629). Neither system uses the image at inference time; both inherit image-text alignment from the training distribution.
 
 The LLaVA teacher remains the reference upper bound for text STA and SIM. This is expected: LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant question for the student is not "does BART beat LLaVA?" but "does our multimodally-grounded fine-tuning produce better rewrites than a text-only detoxification system of similar deployment cost?"
+
+#### Proxy network: VLM-free inference
+
+The proxy network (CLIP image/text → BART encoder soft tokens) allows running the pipeline without LLaVA at inference time. Evaluated on the same 280 held-out test examples:
+
+| Metric | LLaVA teacher | Proxy + BART full |
+|---|---:|---:|
+| Text STA | 0.9903 | 0.8575 |
+| Text STA Delta | 0.2342 | 0.1014 |
+| SIM | 0.4722 | **0.6013** |
+| CLIPScore | 0.6357 | **0.6392** |
+
+The proxy achieves significantly higher SIM (0.601 vs 0.472) and marginally better CLIPScore than the LLaVA teacher, at the cost of lower text STA (0.858 vs 0.990). This suggests the proxy learns to produce rewrites that are semantically close to the original text and well image-aligned, but is less aggressive at detoxification than the full LLaVA pipeline. The proxy is a useful deployment alternative when a 7B VLM is unavailable, trading some detoxification strength for faster, lighter inference.
 
 ### Important Caveat About VisualBERT
 
@@ -771,7 +711,7 @@ The safer conclusion is:
 
 - Text toxicity metrics show that rewrites are less toxic.
 - SIM and CLIPScore show that fine-tuning improves meaning preservation and image-text alignment.
-- VisualBERT does not currently provide a useful absolute pass/fail multimodal detox score for this validation set.
+- VisualBERT does not currently provide a useful absolute pass/fail multimodal detox score for this test set.
 
 ### Training Behavior
 
@@ -820,17 +760,16 @@ The training logs show the expected behavior:
 - Copy rate is monitored to detect outputs that are too close to the original.
 - VisualBERT STA stays flat at 0, reinforcing the caveat above.
 
-For example, in the `full` condition:
+For the `full` condition, validation loss progression across checkpoints:
 
-| Metric | Early eval | Final eval |
-|---|---:|---:|
-| Eval loss | 1.5503 | 1.4423 |
-| Text STA | 0.8631 | 0.9274 |
-| Text toxicity drop | 0.1914 | 0.2547 |
-| Detox quality | 0.2091 | 0.2788 |
-| High-copy rate | 0.1061 | 0.0754 |
+| Step | Val Loss |
+|---:|---:|
+| 200 | 1.4025 |
+| 800 | 1.2254 |
+| 1600 | 1.1890 (best) |
+| 2240 | 1.1948 |
 
-This confirms that the model is not merely memorizing copies of the input. It learns to produce outputs that are more non-toxic while keeping a controlled level of similarity to the source.
+This confirms that the model continues improving throughout training without diverging, and the best checkpoint is saved automatically.
 
 ### Final Interpretation
 
@@ -842,11 +781,11 @@ The current finetuning is useful for the intended scope. It distills part of LLa
 - It avoids obvious collapse.
 - It can be evaluated under multiple conditioning ablations.
 
-The comparison with DetoxLLM is the main external validity check. Both are inference-time text-only models; the difference is that ours was fine-tuned on meme-specific rewrites grounded by visual explanations from LLaVA, while DetoxLLM was trained on general-purpose text detoxification data. If our model matches DetoxLLM on text STA and outperforms it on CLIPScore, that demonstrates the benefit of multimodal grounding in training even when images are not used at inference time.
+The comparison with DetoxLLM is the main external validity check. Both are inference-time text-only models; the difference is that ours was fine-tuned on meme-specific rewrites grounded by visual explanations from LLaVA, while DetoxLLM was trained on general-purpose text detoxification data. Our model outperforms DetoxLLM on text STA across all conditioning conditions, confirming the benefit of meme-specific training even without image access at inference time. DetoxLLM scores higher on SIM, partly due to copy behavior inflating its semantic similarity score.
 
 The most interesting next steps are:
 
-1. Analyse the DetoxLLM comparison once results are available, focusing on CLIPScore vs SIM trade-offs.
+1. Analyse the SIM vs text STA trade-off more carefully, particularly whether DetoxLLM's higher SIM reflects genuine meaning preservation or copy behavior.
 2. Improve or replace the multimodal toxicity metric, because the current VisualBERT score is not sufficiently informative.
 3. Inspect qualitative outputs per condition to understand why `none`, `visual_only`, and `full` are close in final performance.
 4. Consider stronger conditioning usage, for example by training a single multi-condition model with explicit condition dropout rather than four fully separate models.

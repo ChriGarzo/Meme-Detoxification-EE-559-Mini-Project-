@@ -449,10 +449,32 @@ def main():
         )
     )
     parser.add_argument(
+        "--val_rewrites_path",
+        type=str,
+        default="",
+        help=(
+            "Path to val_pseudo_rewrites_merged.jsonl (Stage 1 output on unified_val.csv). "
+            "When provided, val.jsonl is built from this file using the same quality filters "
+            "as train, and the internal train_ratio random split is skipped."
+        )
+    )
+    parser.add_argument(
+        "--test_rewrites_path",
+        type=str,
+        default="",
+        help=(
+            "Path to test_pseudo_rewrites_merged.jsonl (Stage 1 output on unified_test.csv). "
+            "When provided, test.jsonl is built from this file using the same quality filters."
+        )
+    )
+    parser.add_argument(
         "--train_ratio",
         type=float,
         default=0.9,
-        help="Train split ratio after filtering"
+        help=(
+            "Train split ratio used only when --val_rewrites_path is NOT provided "
+            "(legacy fallback: internal random split of train data)."
+        )
     )
     parser.add_argument(
         "--seed",
@@ -482,12 +504,17 @@ def main():
     print(f"  Stage 1 dir: {args.stage1_dir}")
     default_merged = str(Path(args.stage1_dir) / "train_pseudo_rewrites_merged.jsonl")
     rewrites_path = args.rewrites_path.strip() or default_merged
-    print(f"  Rewrites:    {rewrites_path}")
+    val_rewrites_path = args.val_rewrites_path.strip()
+    test_rewrites_path = args.test_rewrites_path.strip()
+    print(f"  Train rewrites: {rewrites_path}")
+    print(f"  Val rewrites:   {val_rewrites_path or '(internal split from train)'}")
+    print(f"  Test rewrites:  {test_rewrites_path or '(none)'}")
     print(f"  Output dir:  {args.output_dir}")
     print(f"  Require Stage 1 pass: {not args.allow_failed_stage1_filters}")
     print(f"  Min tox drop > {args.min_toxicity_drop}")
     print(f"  Max source similarity: {args.max_source_similarity}")
-    print(f"  Train ratio: {args.train_ratio}")
+    if not val_rewrites_path:
+        print(f"  Train ratio: {args.train_ratio} (legacy internal split)")
     print(f"  Seed:        {args.seed}")
     print(f"  Debug:       {args.debug}")
     print(f"{'='*60}\n")
@@ -548,12 +575,61 @@ def main():
             logger.error("All examples filtered out by --max_source_similarity")
             return 1
 
-    # Split into train/val
-    train_data, val_data = split_train_val(
-        training_data,
-        train_ratio=args.train_ratio,
-        seed=args.seed,
-    )
+    # Build val data: from dedicated val rewrites path, or fall back to internal split
+    val_data: List[Dict] = []
+    if val_rewrites_path:
+        val_raw = load_merged_rewrites(val_rewrites_path)
+        if not val_raw:
+            logger.error("No examples loaded from val rewrites file: %s", val_rewrites_path)
+            return 1
+        val_raw, val_dropped = filter_rows_for_stage2(
+            val_raw,
+            min_toxicity_drop=args.min_toxicity_drop,
+            require_passed_stage1_filters=not args.allow_failed_stage1_filters,
+        )
+        val_data = build_training_data(val_raw)
+        if args.max_source_similarity < 1.0:
+            val_data = [
+                ex for ex in val_data
+                if _safe_float(ex.get("source_similarity")) is not None
+                and float(ex["source_similarity"]) <= args.max_source_similarity
+            ]
+        train_data = training_data
+        logger.info("Using dedicated val set: %d examples", len(val_data))
+    else:
+        # Legacy fallback: random internal split of train data
+        train_data, val_data = split_train_val(
+            training_data,
+            train_ratio=args.train_ratio,
+            seed=args.seed,
+        )
+        logger.warning(
+            "No --val_rewrites_path provided; falling back to internal %g/%g random split. "
+            "This means val data is a subset of train — use --val_rewrites_path for proper evaluation.",
+            args.train_ratio,
+            1 - args.train_ratio,
+        )
+
+    # Build test data if path provided
+    test_data: List[Dict] = []
+    if test_rewrites_path:
+        test_raw = load_merged_rewrites(test_rewrites_path)
+        if not test_raw:
+            logger.error("No examples loaded from test rewrites file: %s", test_rewrites_path)
+            return 1
+        test_raw, _ = filter_rows_for_stage2(
+            test_raw,
+            min_toxicity_drop=args.min_toxicity_drop,
+            require_passed_stage1_filters=not args.allow_failed_stage1_filters,
+        )
+        test_data = build_training_data(test_raw)
+        if args.max_source_similarity < 1.0:
+            test_data = [
+                ex for ex in test_data
+                if _safe_float(ex.get("source_similarity")) is not None
+                and float(ex["source_similarity"]) <= args.max_source_similarity
+            ]
+        logger.info("Built test set: %d examples", len(test_data))
 
     # Write outputs
     train_path = output_dir / "train.jsonl"
@@ -561,6 +637,10 @@ def main():
 
     write_jsonl(train_data, str(train_path))
     write_jsonl(val_data, str(val_path))
+
+    if test_data:
+        test_path = output_dir / "test.jsonl"
+        write_jsonl(test_data, str(test_path))
 
     # Dataset statistics
     from collections import Counter
@@ -594,6 +674,9 @@ def main():
             "after_rewrite_text_quality_filter": len(training_data),
             "train_samples": len(train_data),
             "val_samples": len(val_data),
+            "test_samples": len(test_data),
+            "val_source": val_rewrites_path if val_rewrites_path else "internal_split",
+            "test_source": test_rewrites_path if test_rewrites_path else "none",
         },
         "dataset_source_distribution": dict(dataset_counts.most_common()),
         "target_group_distribution": dict(target_group_counts.most_common()),
@@ -617,7 +700,9 @@ def main():
         print(f"After parse/toxicity filter:                 {len(examples)}")
     print(f"After rewrite text quality filter:           {len(training_data)}")
     print(f"  Training examples:                {len(train_data)}")
-    print(f"  Validation examples:              {len(val_data)}")
+    print(f"  Validation examples:              {len(val_data)}  (source: {'dedicated val set' if val_rewrites_path else 'internal split'})")
+    if test_data:
+        print(f"  Test examples:                    {len(test_data)}")
     print(f"\nBreakdown by source dataset:")
     for ds, count in sorted(dataset_counts.items()):
         print(f"  {ds:<20} {count:>6} examples")
@@ -630,6 +715,8 @@ def main():
     print(f"\nOutput directory: {output_dir}")
     print(f"  train.jsonl:            {len(train_data)} examples")
     print(f"  val.jsonl:              {len(val_data)} examples")
+    if test_data:
+        print(f"  test.jsonl:             {len(test_data)} examples")
     print(f"  dataset_statistics.json saved")
     if training_data:
         ex = training_data[0]

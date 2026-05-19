@@ -7,12 +7,12 @@ set -e
 #   + VisualBERT-style multimodal hatefulness scoring
 #
 # Usage:
-#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh <UID_NUMBER>
-#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh <UID_NUMBER>
+#   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh
 #
 # Example:
 #   for i in $(seq 0 7); do
-#     SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_multimodal_sharded.sh
+#     SHARD_ID=$i NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh
 #   done
 #
 # Note: USERNAME is taken automatically from $USER.
@@ -37,6 +37,7 @@ STAGE1_BATCH_SIZE="${STAGE1_BATCH_SIZE:-4}"
 SCORE_BATCH_SIZE="${SCORE_BATCH_SIZE:-8}"
 NUM_SHARDS="${NUM_SHARDS:-8}"
 SHARD_ID="${SHARD_ID:-0}"
+SPLIT="${SPLIT:-train}"
 MULTIMODAL_MODEL_NAME="${MULTIMODAL_MODEL_NAME:-chiragmittal92/visualbert-hateful-memes-finetuned-model}"
 
 if [ "${NUM_SHARDS}" -lt 1 ]; then
@@ -45,6 +46,10 @@ if [ "${NUM_SHARDS}" -lt 1 ]; then
 fi
 if [ "${SHARD_ID}" -lt 0 ] || [ "${SHARD_ID}" -ge "${NUM_SHARDS}" ]; then
     echo "ERROR: SHARD_ID must be in [0, NUM_SHARDS-1] (got SHARD_ID=${SHARD_ID}, NUM_SHARDS=${NUM_SHARDS})"
+    exit 1
+fi
+if [ "${SPLIT}" != "train" ] && [ "${SPLIT}" != "val" ] && [ "${SPLIT}" != "test" ]; then
+    echo "ERROR: SPLIT must be one of: train, val, test (got '${SPLIT}')"
     exit 1
 fi
 
@@ -59,12 +64,12 @@ else
     MODE_LABEL="scratch"
 fi
 
-SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1_multimodal_sharded.py"
+SCRIPT_PATH="${CODE_ROOT}/inference/run_stage1_sharded.py"
 # On login nodes, /scratch may not be mounted at that absolute path even though
 # it is mounted as /scratch inside the RunAI job container. Validate against the
 # local repo as fallback in scratch mode.
 if [ ! -f "${SCRIPT_PATH}" ]; then
-    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1_multimodal_sharded.py" ]; then
+    if [ "${MODE_LABEL}" = "scratch" ] && [ -f "${REPO_ROOT_LOCAL}/inference/run_stage1_sharded.py" ]; then
         echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
     else
         echo "ERROR: Script not found at: ${SCRIPT_PATH}"
@@ -73,14 +78,15 @@ if [ ! -f "${SCRIPT_PATH}" ]; then
     fi
 fi
 
-JOB_NAME="hmr-stage1-mm-s${SHARD_ID}"
+JOB_NAME="hmr-stage1-mm-${SPLIT}-s${SHARD_ID}"
 
 echo "=== Stage 1: Multimodal + Sharded ==="
 echo "  User:     ${USERNAME} (UID: ${UID_NUM})"
 echo "  Mode:     ${MODE_LABEL}"
 echo "  Code:     ${CODE_ROOT}"
 echo "  Group:    ${GROUP_NUM}"
-echo "  Input:    /scratch/hmr_data/unified_splits/unified_train.csv (hateful only)"
+echo "  Split:    ${SPLIT}"
+echo "  Input:    /scratch/hmr_data/unified_splits/unified_${SPLIT}.csv (hateful only)"
 echo "  Image:    ${IMAGE}"
 echo "  Job:      ${JOB_NAME}"
 echo "  Shard:    ${SHARD_ID}/${NUM_SHARDS}"
@@ -100,8 +106,8 @@ runai submit "${JOB_NAME}" \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
     --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
     --command -- python3 ${SCRIPT_PATH} \
-        --dataset train \
-        --manifest_path /scratch/hmr_data/unified_splits/unified_train.csv \
+        --dataset ${SPLIT} \
+        --manifest_path /scratch/hmr_data/unified_splits/unified_${SPLIT}.csv \
         --images_dir /scratch/hmr_data \
         --output_dir /scratch/hmr_stage1_output \
         --hf_cache /scratch/hf_cache \
@@ -117,3 +123,8 @@ echo ""
 echo "Stage 1 shard job submitted."
 echo "Follow logs with:"
 echo "  runai logs ${JOB_NAME} -p course-ee-559-${USERNAME} --follow"
+echo ""
+echo "To run all shards for a split (example for train, 8 shards):"
+echo "  for i in \$(seq 0 7); do SPLIT=train SHARD_ID=\$i NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh; done"
+echo "  for i in \$(seq 0 1); do SPLIT=val  SHARD_ID=\$i NUM_SHARDS=2 bash scripts/runai_stage1_sharded.sh; done"
+echo "  for i in \$(seq 0 1); do SPLIT=test SHARD_ID=\$i NUM_SHARDS=2 bash scripts/runai_stage1_sharded.sh; done"

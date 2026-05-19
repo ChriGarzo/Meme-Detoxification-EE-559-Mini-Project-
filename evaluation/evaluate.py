@@ -229,8 +229,8 @@ def discover_named_systems(
             logger.warning("No JSONL output found in %s", output_dir)
             continue
         system_name = default_name
-        if "proxy_bart_full" in jsonl_path.stem or "proxy" in output_dir.name:
-            system_name = "proxy_plus_none_bart_full"
+        if "clip_proxy_bart_full" in jsonl_path.stem or "proxy" in output_dir.name:
+            system_name = "clip_proxy_bart_full"
         records = load_system_records(
             jsonl_path,
             system_name,
@@ -466,7 +466,7 @@ def main() -> int:
     ))
     systems.update(discover_named_systems(
         args.proxy_output_dirs,
-        "proxy_bart_full",
+        "clip_proxy_bart_full",
         max_examples,
         id_filter=validation_ids,
     ))

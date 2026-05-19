@@ -273,7 +273,7 @@ def main() -> int:
         text_prompt_format=args.text_prompt_format,
     )
 
-    output_path = args.output_dir / "stage2_rewrites_proxy_bart_full.jsonl"
+    output_path = args.output_dir / "stage2_rewrites_clip_proxy_bart_full.jsonl"
     if output_path.exists():
         logger.info("Removing existing output before regeneration: %s", output_path)
         output_path.unlink()
@@ -301,9 +301,9 @@ def main() -> int:
 
             records = []
             system_name = (
-                "proxy_plus_explicit_detox_bart_full"
+                "clip_proxy_bart_full_explicit_detox"
                 if args.text_prompt_format == "none_explicit_detox"
-                else "proxy_plus_none_bart_full"
+                else "clip_proxy_bart_full"
             )
             for ex, rewrite in zip(batch, rewrites):
                 records.append({

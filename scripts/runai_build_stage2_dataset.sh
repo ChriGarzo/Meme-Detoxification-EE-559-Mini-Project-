@@ -74,6 +74,8 @@ runai submit hmr-build-stage2-dataset \
         --stage1_dir /scratch/hmr_stage1_output \
         --output_dir /scratch/hmr_stage2_dataset \
         --hf_cache /scratch/hf_cache \
-        --max_source_similarity 0.95
+        --max_source_similarity 0.95 \
+        --val_rewrites_path /scratch/hmr_stage1_output/val_pseudo_rewrites_merged.jsonl \
+        --test_rewrites_path /scratch/hmr_stage1_output/test_pseudo_rewrites_merged.jsonl
 
 echo "Build Stage 2 dataset job submitted."
