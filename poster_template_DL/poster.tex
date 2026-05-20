@@ -6,12 +6,13 @@
 
 %\usepackage[T1]{fontenc}
 \usepackage{lmodern}
-\usepackage[orientation=portrait,size=a1,scale=1.06]{beamerposter}
+\usepackage[orientation=portrait,size=a0,scale=1.03]{beamerposter}
 \usetheme{gemini}
 \usecolortheme{nott}
 \usepackage{graphicx}
 \usepackage{anyfontsize}
 \usepackage{amssymb}
+\usepackage{multicol}
 \usepackage[ruled,vlined]{algorithm2e}
 \usepackage{setspace}
 \usepackage{pifont}
@@ -32,9 +33,26 @@
 \setlength{\colwidth}{0.45\paperwidth}
 \newcommand{\separatorcolumn}{\begin{column}{\sepwidth}\end{column}}
 
-\setlength{\jot}{15pt}
-\newcommand{\smallgap}{\vspace{0.35em}}
-\newcommand{\tightgap}{\vspace{-0.35em}}
+\setlength{\jot}{8pt}
+\newcommand{\smallgap}{\vspace{0.18em}}
+\newcommand{\tightgap}{\vspace{-0.55em}}
+\newlength{\qualboxheight}
+\setlength{\qualboxheight}{3.0cm}
+
+\makeatletter
+\def\@listi{\leftmargin\leftmarginii
+\topsep 0.35ex
+\parsep 0\p@ \@plus\p@
+\itemsep 0.25ex}
+\makeatother
+
+\setbeamertemplate{block end}
+{
+  \end{beamercolorbox}
+  \vskip0pt
+  \vspace*{0.5ex}
+}
+\setbeamertemplate{bibliography item}{\insertbiblabel.}
 
 % ====================
 % Title etc
@@ -47,8 +65,8 @@
 \institute{Group 31 \samelineand EE-559: Deep Learning, EPFL, 2026}
 
 % use this to include logos on the left and/or right side of the header:
-\logoleft{\begingroup\setlength{\fboxsep}{0.55em}\colorbox{white}{\includegraphics[height=2.65cm]{logos/mints.png}}\endgroup}
-\logoright{\includegraphics[height=7cm]{logos/epfl.png}}
+\logoleft{\begingroup\setlength{\fboxsep}{0.45em}\colorbox{white}{\includegraphics[height=2.5cm]{logos/mints.png}}\endgroup}
+\logoright{\includegraphics[height=6.2cm]{logos/epfl.png}}
 
 % ====================
 % Doc
@@ -102,12 +120,36 @@
     \end{itemize}
     \end{block}
 
+    \begin{block}{Datasets}
+    \small
+    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.15\linewidth} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{0.25\linewidth}}
+        \toprule
+        Dataset & Scope & Licence obtained\\
+        \midrule
+        HarMeme & \(\sim\)3,500 COVID-19 and US-politics memes with harmful/non-harmful labels
+        \cite{pramanick2021harmeme}. & \rule{0.88\linewidth}{0.35pt}\\
+        MAMI & 10,000 misogynist memes from Twitter \cite{fersini2022mami}. &
+        \rule{0.88\linewidth}{0.35pt}\\
+        MMHS150K & \(\sim\)150,000 heterogeneous Twitter image--text posts
+        \cite{gomez2020multimodal}. & \rule{0.88\linewidth}{0.35pt}\\
+        \bottomrule
+    \end{tabularx}
+
+    \smallgap
+    All datasets are filtered to retain meme-like images only. The final Stage 2
+    supervision contains 4,127 clean pseudo-rewrite pairs from 7,918 loaded
+    LLaVA rows. These are split into \textbf{3,578 train}, \textbf{269 validation},
+    and \textbf{280 test} examples. The train split fine-tunes the BART student;
+    validation drives early stopping and hyperparameter selection; the test split
+    is held out and provides all reported metrics.
+    \end{block}
+
     \begin{block}{Method}
     \begin{center}
-        \includestandalone[mode=tex,width=0.86\linewidth]{../architecture_diagram}
+        \includestandalone[mode=tex,width=0.58\linewidth]{../architecture_diagram}
     \end{center}
 
-    \tightgap
+    \vspace{0.35em}
     \begin{itemize}
         \item \textbf{Stage 0:} EasyOCR extracts meme text; CLIP filters
         non-meme-like images, using stricter negative prompts for MMHS150K.
@@ -122,49 +164,33 @@
     \end{itemize}
 
     \smallgap
+    \begin{minipage}[t]{0.40\linewidth}
+    \raggedright
     \textbf{Parameter-efficient adaptation with LoRA.}
     BART-large is kept frozen while small trainable low-rank matrices are added
-    to the attention and feed-forward projections. Each adapted layer becomes
-    \(W' = W + \frac{\alpha}{r}BA\), so training updates only the adapter path
-    rather than the full 406M-parameter model.
+    to attention and feed-forward projections. Each adapted layer becomes
+    \(W' = W + \frac{\alpha}{r}BA\), so training updates only the adapter path.
 
     \smallgap
-    \begin{center}
-        \includestandalone[mode=tex,width=0.72\linewidth]{../lora_adapter_diagram}
-    \end{center}
+    \textbf{Setup.} \(r=32\), \(\alpha=64\), dropout 0.05; 17M trainable
+    parameters (\(\sim\)4.3\%).
 
-    \tightgap
-    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.23\linewidth} X}
-        LoRA setup & \(r=32\), \(\alpha=64\), dropout 0.05; 17M trainable
-        parameters (\(\sim\)4.3\%).\\
-        Conditions & \texttt{full}, \texttt{target\_only},
-        \texttt{visual\_only}, and \texttt{none}.\\
-    \end{tabularx}
+    \smallgap
+    \textbf{Conditions.} \texttt{full}, \texttt{target\_only},
+    \texttt{visual\_only}, \texttt{none}.
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.56\linewidth}
+        \centering
+        \vspace{-0.4em}
+        \includestandalone[mode=tex,width=\linewidth]{../lora_adapter_diagram}
+    \end{minipage}
     \end{block}
 
 \end{column}
 
 \separatorcolumn
 \begin{column}{\colwidth}
-
-    \begin{block}{Datasets}
-    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.18\linewidth} X}
-        HarMeme & \(\sim\)3,500 memes related to COVID-19 and US politics,
-        manually labelled as harmful/non-harmful with associated textual claims
-        \cite{pramanick2021harmeme}.\\
-        MAMI & 10,000 misogynist memes from Twitter \cite{fersini2022mami}.\\
-        MMHS150K & \(\sim\)150,000 heterogeneous and noisy Twitter
-        image--text posts \cite{gomez2020multimodal}.\\
-    \end{tabularx}
-
-    \smallgap
-    All datasets are filtered to retain meme-like images only. The final Stage 2
-    supervision contains 4,127 clean pseudo-rewrite pairs from 7,918 loaded
-    LLaVA rows. These are split into \textbf{3,578 train}, \textbf{269 validation},
-    and \textbf{280 test} examples. The train split fine-tunes the BART student;
-    validation drives early stopping and hyperparameter selection; the test split
-    is held out and provides all reported metrics.
-    \end{block}
 
     \begin{block}{Validation}
     \textbf{Quality on 280 held-out test memes.} Text STA is the mean non-toxic
@@ -192,35 +218,54 @@
 
     \smallgap
     \begin{center}
-    \begin{minipage}[t]{0.35\linewidth}
-        \centering
-        \textbf{Qualitative rewrite}\\[-0.15em]
-        \includegraphics[width=0.84\linewidth]{figures/validation_example_9106.jpg}\\[-0.15em]
-        \fcolorbox{black!18}{black!3}{
-            \begin{minipage}{0.88\linewidth}
-            \centering
-            \scriptsize\textbf{Rewrite}\\
-            ``Back in my day, men were men and women were women''
-            \end{minipage}
-        }
-    \end{minipage}
-    \hfill
-    \begin{minipage}[t]{0.59\linewidth}
-        \textbf{Reading the trade-off.} BART-large FT Full gives the strongest
-        student toxicity reduction and improves over DetoxLLM
-        \cite{hallinan2023detoxllm} on Text STA and $\Delta$ toxicity. Without
-        fine-tuning, BART achieves high STA but collapses semantic similarity
-        (SIM $= -0.06$), showing that fine-tuning is essential for meaning
-        preservation. The CLIP Proxy reaches best-in-class SIM (0.60) at the
-        cost of detoxification strength, revealing a clear fidelity--detoxification
-        trade-off.
-    \end{minipage}
+        \includegraphics[width=0.84\linewidth]{figures/phase2_validation_loss_detox_quality_publication.pdf}
     \end{center}
 
     \smallgap
-    \textbf{Compute and emissions.}
+    \textbf{Reading the trade-off.} BART-large FT Full gives the strongest
+    student toxicity reduction and improves over DetoxLLM
+    \cite{hallinan2023detoxllm} on Text STA and $\Delta$ toxicity. The CLIP
+    Proxy reaches best SIM (0.60) at lower detoxification strength, exposing
+    a fidelity--detoxification trade-off.
+
+    \end{block}
+
+    \begin{block}{Qualitative rewrite}
+    \begin{minipage}[t]{0.40\linewidth}
+        \vspace{0pt}
+        \centering
+        \includegraphics[width=0.90\linewidth]{figures/validation_example_9106.jpg}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.56\linewidth}
+        \vspace{0pt}
+        \raggedright
+        \textbf{Teacher-guided student output.} The rewrite keeps the meme's
+        nostalgic structure while removing the explicit ownership claim and
+        preserving a grammatically natural sentence.
+
+        \smallgap
+        \fcolorbox{black!18}{black!3}{
+            \begin{minipage}[t][\qualboxheight][t]{0.94\linewidth}
+            \textbf{Detected harmful framing}\\
+            \small ``Back in my day, men were men and women were property.''
+            \end{minipage}
+        }
+
+        \smallgap
+        \fcolorbox{green!45!black}{green!6}{
+            \begin{minipage}[t][\qualboxheight][t]{0.94\linewidth}
+            \textbf{Detoxified rewrite}\\
+            \small ``Back in my day, men were men and women were women.''
+            \end{minipage}
+        }
+    \end{minipage}
+    \end{block}
+
+    \begin{block}{Compute and emissions}
+
     \begin{center}
-        \includegraphics[width=0.98\linewidth]{figures/compute_emissions_lollipop.pdf}
+        \includegraphics[width=0.86\linewidth]{figures/compute_emissions_lollipop.pdf}
     \end{center}
 
     \smallgap
@@ -231,7 +276,7 @@
 
     \smallgap
     \begin{center}
-    \begin{tabular}{@{}c@{\hspace{2.6cm}}c@{\hspace{2.6cm}}c@{}}
+    \begin{tabular}{@{}c@{\hspace{2.2cm}}c@{\hspace{2.2cm}}c@{}}
         \shortstack{\textbf{+1.88 pts}\\Text STA vs. DetoxLLM} &
         \shortstack{\textbf{76.6\(\times\)}\\BART speedup vs. LLaVA} &
         \shortstack{\textbf{496 g}\\total measured CO$_2$}\\
@@ -255,6 +300,7 @@
     \end{block}
 
     \begin{block}{Conclusion}
+    \raggedright
     This project shows that multimodal supervision from LLaVA-Next can be
     distilled into a lightweight BART-large student that performs
     meme-specific text detoxification: it reduces toxicity while preserving
@@ -269,7 +315,25 @@
     \end{block}
 
     \begin{block}{References}
-        \scriptsize{\bibliographystyle{unsrt}\bibliography{poster}}
+    \vspace{-0.6em}
+    \begin{multicols}{2}
+    \tiny
+    \begin{thebibliography}{9}
+        \setlength{\itemsep}{0pt}
+        \setlength{\parskip}{0pt}
+        \setlength{\parsep}{0pt}
+        \bibitem{kiela2020hateful} Kiela et al., \emph{The Hateful Memes Challenge}, NeurIPS 2020.
+        \bibitem{li2019visualbert} Li et al., \emph{VisualBERT}, arXiv 2019.
+        \bibitem{radford2021learning} Radford et al., \emph{CLIP}, ICML 2021.
+        \bibitem{logacheva2022paradetox} Logacheva et al., \emph{ParaDetox}, ACL 2022.
+        \bibitem{liu2024llava} Liu et al., \emph{LLaVA-NeXT}, arXiv 2024.
+        \bibitem{pramanick2021harmeme} Pramanick et al., \emph{HarMeme}, EMNLP 2021.
+        \bibitem{fersini2022mami} Fersini et al., \emph{MAMI}, SemEval 2022.
+        \bibitem{gomez2020multimodal} Gomez et al., \emph{Multimodal Hate Speech}, WACV 2020.
+        \bibitem{hallinan2023detoxllm} Hallinan et al., \emph{DetoxLLM}, 2023.
+    \end{thebibliography}
+    \end{multicols}
+    \vspace{-0.8em}
     \end{block}
 
 \end{column}
