@@ -16,14 +16,15 @@ set -euo pipefail
 
 CODE_ROOT="${1:-/scratch/hateful_meme_rewriting}"
 HF_CACHE="${HF_CACHE:-/scratch/hf_cache}"
-VALIDATION_JSONL="${VALIDATION_JSONL:-/scratch/hmr_stage2_dataset/test.jsonl}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch}"
-INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
+STAGES_ROOT="${STAGES_ROOT:-/scratch/stages}"
+EVAL_ROOT="${EVAL_ROOT:-/scratch/eval_results}"
+VALIDATION_JSONL="${VALIDATION_JSONL:-${STAGES_ROOT}/hmr_stage2_dataset/test.jsonl}"
+INPUT_FORMAT="${INPUT_FORMAT:-explicit_detox}"
 TASK_PREFIX="${TASK_PREFIX:-}"
-CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
-EVAL_SUFFIX="${EVAL_SUFFIX:-}"
-PROXY_CHECKPOINT="${PROXY_CHECKPOINT:-/scratch/hmr_proxy_checkpoint/best_proxy.pt}"
-PROXY_TEXT_PROMPT_FORMAT="${PROXY_TEXT_PROMPT_FORMAT:-none_legacy}"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-_explicit_detox}"
+EVAL_SUFFIX="${EVAL_SUFFIX:-_explicit_detox}"
+PROXY_CHECKPOINT="${PROXY_CHECKPOINT:-${STAGES_ROOT}/hmr_proxy_checkpoint_explicit_detox/best_proxy.pt}"
+PROXY_TEXT_PROMPT_FORMAT="${PROXY_TEXT_PROMPT_FORMAT:-none_explicit_detox}"
 
 TASK_PREFIX_ARGS=()
 if [ -n "${TASK_PREFIX}" ]; then
@@ -41,7 +42,9 @@ echo "Ckpt suffix:     ${CHECKPOINT_SUFFIX}"
 echo "Eval suffix:     ${EVAL_SUFFIX}"
 echo "Proxy ckpt:      ${PROXY_CHECKPOINT}"
 echo "Proxy prompt:    ${PROXY_TEXT_PROMPT_FORMAT}"
-echo "Output:          ${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
+echo "Stages root:     ${STAGES_ROOT}"
+echo "Eval root:       ${EVAL_ROOT}"
+echo "Output:          ${EVAL_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
 echo ""
 
 VAL_COUNT="$(wc -l < "${VALIDATION_JSONL}")"
@@ -88,7 +91,7 @@ for COND in full target_only visual_only none; do
     run_stage2_if_needed \
         "${COND}" \
         "facebook/bart-large" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_${COND}${EVAL_SUFFIX}"
+        "${EVAL_ROOT}/hmr_eval_bart_base_${COND}${EVAL_SUFFIX}"
 done
 
 # ---------------------------------------------------------------------------
@@ -98,14 +101,14 @@ echo "=== Finetuned BART inference ==="
 for COND in full target_only visual_only none; do
     run_stage2_if_needed \
         "${COND}" \
-        "${OUTPUT_ROOT}/hmr_stage2_phase2_${COND}${CHECKPOINT_SUFFIX}_checkpoint" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_${COND}${EVAL_SUFFIX}"
+        "${STAGES_ROOT}/hmr_stage2_phase2_${COND}${CHECKPOINT_SUFFIX}_checkpoint" \
+        "${EVAL_ROOT}/hmr_eval_stage2_${COND}${EVAL_SUFFIX}"
 done
 
 # ---------------------------------------------------------------------------
 # Step 3: DetoxLLM inference
 # ---------------------------------------------------------------------------
-DETOXLLM_OUTPUT_DIR="${OUTPUT_ROOT}/hmr_eval_detoxllm${EVAL_SUFFIX}"
+DETOXLLM_OUTPUT_DIR="${EVAL_ROOT}/hmr_eval_detoxllm${EVAL_SUFFIX}"
 DETOXLLM_OUTPUT_FILE="${DETOXLLM_OUTPUT_DIR}/detoxllm_rewrites.jsonl"
 
 echo "=== DetoxLLM inference ==="
@@ -131,9 +134,9 @@ fi
 # ---------------------------------------------------------------------------
 # Step 4: Proxy + BART inference
 # ---------------------------------------------------------------------------
-PROXY_OUTPUT_DIR="${OUTPUT_ROOT}/hmr_eval_clip_proxy_bart_full${EVAL_SUFFIX}"
+PROXY_OUTPUT_DIR="${EVAL_ROOT}/hmr_eval_clip_proxy_bart_full${EVAL_SUFFIX}"
 PROXY_OUTPUT_FILE="${PROXY_OUTPUT_DIR}/stage2_rewrites_clip_proxy_bart_full.jsonl"
-BART_CHECKPOINT="${OUTPUT_ROOT}/hmr_stage2_phase2_full${CHECKPOINT_SUFFIX}_checkpoint"
+BART_CHECKPOINT="${STAGES_ROOT}/hmr_stage2_phase2_full${CHECKPOINT_SUFFIX}_checkpoint"
 
 echo "=== Proxy + BART inference ==="
 NEED_PROXY_RECOMPUTE=0
@@ -176,19 +179,19 @@ echo "=== Final evaluation: all systems ==="
 python3 "${CODE_ROOT}/evaluation/evaluate.py" \
     --validation_jsonl "${VALIDATION_JSONL}" \
     --bart_base_output_dirs \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_full${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_target_only${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_visual_only${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_bart_base_none${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_bart_base_full${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_bart_base_target_only${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_bart_base_visual_only${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_bart_base_none${EVAL_SUFFIX}" \
     --bart_finetuned_output_dirs \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_full${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_target_only${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_visual_only${EVAL_SUFFIX}" \
-        "${OUTPUT_ROOT}/hmr_eval_stage2_none${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_stage2_full${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_stage2_target_only${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_stage2_visual_only${EVAL_SUFFIX}" \
+        "${EVAL_ROOT}/hmr_eval_stage2_none${EVAL_SUFFIX}" \
     --detoxllm_output_path "${DETOXLLM_OUTPUT_DIR}" \
     --proxy_output_dirs "${PROXY_OUTPUT_DIR}" \
-    --output_dir "${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}" \
+    --output_dir "${EVAL_ROOT}/hmr_eval_results${EVAL_SUFFIX}" \
     --hf_cache "${HF_CACHE}"
 
 echo "=== Evaluation complete ==="
-echo "Results: ${OUTPUT_ROOT}/hmr_eval_results${EVAL_SUFFIX}"
+echo "Results: ${EVAL_ROOT}/hmr_eval_results${EVAL_SUFFIX}"

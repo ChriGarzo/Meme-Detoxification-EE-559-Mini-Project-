@@ -33,7 +33,10 @@ Stage 1 ──── LLaVA-Next explanations + pseudo-rewrites (sharded)  [GPU]
                │  train.jsonl  ← from train_pseudo_rewrites_merged.jsonl (quality-filtered)
                │  val.jsonl    ← from val_pseudo_rewrites_merged.jsonl   (quality-filtered)
                │  test.jsonl   ← from test_pseudo_rewrites_merged.jsonl  (quality-filtered)
-               │  Input format: [T: {target}] [V: {visual_evidence}] [M: {meaning}] | {text}
+               │  Input format: "Task: rewrite the original meme text to be non-toxic while
+               │    preserving the meme topic and intended meaning. Context: target group =
+               │    {target}; visual evidence = {visual_evidence}; implicit harmful meaning =
+               │    {meaning}. Original meme text to detoxify: {text}"
                ▼
 Stage 2 ───── BART LoRA meme fine-tuning (×4 conditions in parallel)  [GPU]
                │  Conditions: full | target_only | visual_only | none
@@ -403,39 +406,47 @@ Runs all inference and evaluation in a single job: BART base (4 conditions), fin
 │   ├── mmhs150k/  (same structure)
 │   ├── filtering_results/                  ← QC output from runai_sample_filter_examples.sh
 │   │   ├── kept/
-│   │   │   ├── harmeme/
-│   │   │   ├── mami/
-│   │   │   └── mmhs150k/
 │   │   └── discarded/
-│   │       ├── harmeme/
-│   │       ├── mami/
-│   │       └── mmhs150k/
 │   └── unified_splits/                     ← built after all Stage 0 jobs complete
 │       ├── unified_train.csv
 │       ├── unified_val.csv
 │       ├── unified_test.csv
 │       └── split_stats.json
-├── hmr_stage1_output/
-│   ├── train_pseudo_rewrites_shard00of08.jsonl
-│   ├── ... train_pseudo_rewrites_shard07of08.jsonl
-│   ├── train_pseudo_rewrites_merged.jsonl
-│   ├── val_pseudo_rewrites_shard00of02.jsonl
-│   ├── val_pseudo_rewrites_shard01of02.jsonl
-│   ├── val_pseudo_rewrites_merged.jsonl
-│   ├── test_pseudo_rewrites_shard00of02.jsonl
-│   ├── test_pseudo_rewrites_shard01of02.jsonl
-│   └── test_pseudo_rewrites_merged.jsonl
-├── hmr_stage2_dataset/
-│   ├── train.jsonl                         ← 3,578 examples (from unified_train.csv)
-│   ├── val.jsonl                           ← 269 examples  (from unified_val.csv)
-│   ├── test.jsonl                          ← 280 examples  (from unified_test.csv)
-│   └── dataset_statistics.json
-├── hmr_stage2_phase2_full_checkpoint/
-├── hmr_stage2_phase2_target_only_checkpoint/
-├── hmr_stage2_phase2_visual_only_checkpoint/
-├── hmr_stage2_phase2_none_checkpoint/
-├── hmr_proxy_checkpoint/
-└── hmr_eval_results/
+│
+├── stages/                                 ← active pipeline outputs (explicit_detox format)
+│   ├── hmr_stage1_output/
+│   │   ├── train_pseudo_rewrites_shard00of08.jsonl
+│   │   ├── ... train_pseudo_rewrites_shard07of08.jsonl
+│   │   ├── train_pseudo_rewrites_merged.jsonl
+│   │   ├── val_pseudo_rewrites_shard00of02.jsonl
+│   │   ├── val_pseudo_rewrites_shard01of02.jsonl
+│   │   ├── val_pseudo_rewrites_merged.jsonl
+│   │   ├── test_pseudo_rewrites_shard00of02.jsonl
+│   │   ├── test_pseudo_rewrites_shard01of02.jsonl
+│   │   └── test_pseudo_rewrites_merged.jsonl
+│   ├── hmr_stage2_dataset/
+│   │   ├── train.jsonl                     ← 3,578 examples (from unified_train.csv)
+│   │   ├── val.jsonl                       ← 269 examples  (from unified_val.csv)
+│   │   ├── test.jsonl                      ← 280 examples  (from unified_test.csv)
+│   │   └── dataset_statistics.json
+│   ├── hmr_stage2_phase2_full_explicit_detox_checkpoint/
+│   ├── hmr_stage2_phase2_target_only_explicit_detox_checkpoint/
+│   ├── hmr_stage2_phase2_visual_only_explicit_detox_checkpoint/
+│   ├── hmr_stage2_phase2_none_explicit_detox_checkpoint/
+│   └── hmr_proxy_checkpoint_explicit_detox/
+│
+├── eval_results/                           ← evaluation outputs (explicit_detox format)
+│   ├── hmr_eval_results_explicit_detox/    ← final summary TSV/JSON
+│   ├── hmr_eval_bart_base_{full,target_only,visual_only,none}_explicit_detox/
+│   ├── hmr_eval_stage2_{full,target_only,visual_only,none}_explicit_detox/
+│   ├── hmr_eval_clip_proxy_bart_full_explicit_detox/
+│   └── hmr_eval_detoxllm_explicit_detox/
+│
+├── plots/                                  ← training and proxy plots
+│   ├── hmr_training_plots_explicit_detox/
+│   └── hmr_proxy_training_plots/
+│
+└── old_results/                            ← legacy (legacy input format); kept for reference
 ```
 
 ---
@@ -560,10 +571,10 @@ The implemented pipeline follows an explain-then-rewrite strategy:
 
    | Condition | Encoder input format |
    |---|---|
-   | `full` | `[T: target_group] [V: visual_evidence] [M: implicit_meaning] \| original_text` |
-   | `target_only` | `[T: target_group] [V: null] [M: null] \| original_text` |
-   | `visual_only` | `[T: null] [V: visual_evidence] [M: null] \| original_text` |
-   | `none` | `[T: null] [V: null] [M: null] \| original_text` |
+   | `full` | `Task: rewrite the original meme text to be non-toxic while preserving the meme topic and intended meaning. Context: target group = {tg}; visual evidence = {ve}; implicit harmful meaning = {im}. Original meme text to detoxify: {text}` |
+   | `target_only` | same template with `visual evidence = null; implicit harmful meaning = null` |
+   | `visual_only` | same template with `target group = null; implicit harmful meaning = null` |
+   | `none` | same template with `target group = null; visual evidence = null; implicit harmful meaning = null` |
 
    The current fine-tuning setup is:
    - Base model: `facebook/bart-large`.
@@ -622,17 +633,17 @@ The compact TSV is the easiest file to inspect. Its columns mean:
 
 ### Current Test Results
 
-Latest `evaluation_summary.tsv` — all systems on the same 280 held-out test examples from `unified_test.csv`:
+Latest `evaluation_summary.tsv` — all systems on the same 280 held-out test examples from `unified_test.csv`. BART models trained with the `explicit_detox` input format.
 
 | System | n | Text STA | Text STA Delta | SIM | CLIP | VisualBERT Hate Prob | VisualBERT STA | VisualBERT Hate Drop |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `llava_teacher` | 280 | 0.9903 | 0.2342 | 0.4722 | 0.6357 | 0.6511 | 0.0000 | -0.0053 |
 | `detoxllm` | 280 | 0.9400 | 0.1839 | 0.4433 | 0.6337 | 0.6489 | 0.0000 | -0.0031 |
-| `bart_finetuned_full` | 280 | 0.9634 | 0.2073 | 0.3311 | 0.6288 | 0.6526 | 0.0000 | -0.0068 |
-| `bart_finetuned_target_only` | 280 | 0.9518 | 0.1957 | 0.3445 | 0.6294 | 0.6515 | 0.0000 | -0.0057 |
-| `bart_finetuned_visual_only` | 280 | 0.9581 | 0.2020 | 0.3413 | 0.6292 | 0.6519 | 0.0000 | -0.0061 |
-| `bart_finetuned_none` | 280 | 0.9621 | 0.2060 | 0.3470 | 0.6283 | 0.6524 | 0.0000 | -0.0065 |
-| `clip_proxy_bart_full` | 280 | 0.8575 | 0.1014 | 0.6013 | 0.6392 | 0.6469 | 0.0000 | -0.0011 |
+| `bart_finetuned_full` | 280 | 0.9588 | 0.2027 | 0.3395 | 0.6280 | 0.6505 | 0.0000 | -0.0047 |
+| `bart_finetuned_target_only` | 280 | 0.9643 | 0.2082 | 0.3422 | 0.6282 | 0.6518 | 0.0000 | -0.0060 |
+| `bart_finetuned_visual_only` | 280 | 0.9502 | 0.1941 | 0.3301 | 0.6288 | 0.6521 | 0.0000 | -0.0063 |
+| `bart_finetuned_none` | 280 | 0.9508 | 0.1947 | 0.3308 | 0.6287 | 0.6512 | 0.0000 | -0.0054 |
+| `clip_proxy_bart_full` | 280 | 0.8787 | 0.1225 | 0.6004 | 0.6395 | 0.6488 | 0.0000 | -0.0030 |
 
 ### Main Findings
 
@@ -644,28 +655,28 @@ Compared with non-finetuned BART, the finetuned BART models move from negative S
 
 | Condition | Base BART SIM | Finetuned BART SIM | Change |
 |---|---:|---:|---:|
-| `full` | -0.2169 | 0.3311 | +0.5480 |
-| `target_only` | -0.2590 | 0.3445 | +0.6035 |
-| `visual_only` | -0.2046 | 0.3413 | +0.5459 |
-| `none` | -0.2434 | 0.3470 | +0.5904 |
+| `full` | -0.0609 | 0.3395 | +0.4004 |
+| `target_only` | -0.0609 | 0.3422 | +0.4031 |
+| `visual_only` | -0.0609 | 0.3301 | +0.3910 |
+| `none` | -0.0609 | 0.3308 | +0.3917 |
 
 CLIPScore also improves in every condition:
 
 | Condition | Base BART CLIP | Finetuned BART CLIP | Change |
 |---|---:|---:|---:|
-| `full` | 0.6080 | 0.6288 | +0.0208 |
-| `target_only` | 0.5979 | 0.6294 | +0.0315 |
-| `visual_only` | 0.6006 | 0.6292 | +0.0286 |
-| `none` | 0.5959 | 0.6283 | +0.0324 |
+| `full` | 0.6218 | 0.6280 | +0.0062 |
+| `target_only` | 0.6218 | 0.6282 | +0.0064 |
+| `visual_only` | 0.6218 | 0.6288 | +0.0070 |
+| `none` | 0.6218 | 0.6287 | +0.0069 |
 
 Textual detoxification remains high after fine-tuning:
 
 | Condition | Base BART Text STA | Finetuned BART Text STA |
 |---|---:|---:|
-| `full` | 0.9333 | 0.9634 |
-| `target_only` | 0.9542 | 0.9518 |
-| `visual_only` | 0.9621 | 0.9581 |
-| `none` | 0.9628 | 0.9621 |
+| `full` | 0.9730 | 0.9588 |
+| `target_only` | 0.9730 | 0.9643 |
+| `visual_only` | 0.9730 | 0.9502 |
+| `none` | 0.9730 | 0.9508 |
 
 The `full` condition improves both text STA and faithfulness over base BART. The other finetuned conditions maintain strong detoxification while substantially improving semantic similarity. For the project goal this trade-off is acceptable: a model that keeps `text_sta` around 0.95–0.96 while greatly improving semantic similarity is more useful than a model that produces generic safe text unrelated to the intended rewrite.
 
@@ -675,17 +686,17 @@ DetoxLLM (`UBC-NLP/DetoxLLM-7B`) is the primary external baseline. It was explic
 
 Results (280 test examples):
 
-| Metric | DetoxLLM | BART finetuned `full` | BART finetuned `none` |
+| Metric | DetoxLLM | BART finetuned `full` | BART finetuned `target_only` |
 |---|---:|---:|---:|
-| Text STA | 0.9400 | **0.9634** | **0.9621** |
-| Text STA Delta | 0.1839 | **0.2073** | **0.2060** |
-| SIM | **0.4433** | 0.3311 | 0.3470 |
-| CLIPScore | **0.6337** | 0.6288 | 0.6283 |
+| Text STA | 0.9400 | **0.9588** | **0.9643** |
+| Text STA Delta | 0.1839 | **0.2027** | **0.2082** |
+| SIM | **0.4433** | 0.3395 | 0.3422 |
+| CLIPScore | **0.6337** | 0.6280 | 0.6282 |
 
 Key findings:
 
-- **Text STA**: all finetuned BART conditions (0.952–0.963) outperform DetoxLLM (0.940). DetoxLLM was trained on broad web-text detoxification and struggles with meme-style OCR captions — it produces exact copies for a fraction of inputs, which drags down its average toxicity reduction.
-- **SIM**: DetoxLLM scores higher (0.443 vs 0.331–0.347). This is partly a consequence of copy behaviour — verbatim copies produce artificially high semantic similarity — rather than genuine meaning preservation in rewrites.
+- **Text STA**: all finetuned BART conditions (0.950–0.964) outperform DetoxLLM (0.940). DetoxLLM was trained on broad web-text detoxification and struggles with meme-style OCR captions — it produces exact copies for a fraction of inputs, which drags down its average toxicity reduction.
+- **SIM**: DetoxLLM scores higher (0.443 vs 0.330–0.342). This is partly a consequence of copy behaviour — verbatim copies produce artificially high semantic similarity — rather than genuine meaning preservation in rewrites.
 - **CLIPScore**: DetoxLLM edges out finetuned BART slightly (0.634 vs 0.628–0.629). Neither system uses the image at inference time; both inherit image-text alignment from the training distribution.
 
 The LLaVA teacher remains the reference upper bound for text STA and SIM. This is expected: LLaVA is a much larger vision-language model and also produced the pseudo-labels. The relevant question for the student is not "does BART beat LLaVA?" but "does our multimodally-grounded fine-tuning produce better rewrites than a text-only detoxification system of similar deployment cost?"
@@ -696,12 +707,12 @@ The proxy network (CLIP image/text → BART encoder soft tokens) allows running 
 
 | Metric | LLaVA teacher | Proxy + BART full |
 |---|---:|---:|
-| Text STA | 0.9903 | 0.8575 |
-| Text STA Delta | 0.2342 | 0.1014 |
-| SIM | 0.4722 | **0.6013** |
-| CLIPScore | 0.6357 | **0.6392** |
+| Text STA | 0.9903 | 0.8787 |
+| Text STA Delta | 0.2342 | 0.1225 |
+| SIM | 0.4722 | **0.6004** |
+| CLIPScore | 0.6357 | **0.6395** |
 
-The proxy achieves significantly higher SIM (0.601 vs 0.472) and marginally better CLIPScore than the LLaVA teacher, at the cost of lower text STA (0.858 vs 0.990). This suggests the proxy learns to produce rewrites that are semantically close to the original text and well image-aligned, but is less aggressive at detoxification than the full LLaVA pipeline. The proxy is a useful deployment alternative when a 7B VLM is unavailable, trading some detoxification strength for faster, lighter inference.
+The proxy achieves significantly higher SIM (0.600 vs 0.472) and marginally better CLIPScore than the LLaVA teacher, at the cost of lower text STA (0.879 vs 0.990). This suggests the proxy learns to produce rewrites that are semantically close to the original text and well image-aligned, but is less aggressive at detoxification than the full LLaVA pipeline. The proxy is a useful deployment alternative when a 7B VLM is unavailable, trading some detoxification strength for faster, lighter inference.
 
 ### Important Caveat About VisualBERT
 
@@ -735,6 +746,9 @@ The current plots are stored in:
 ├── phase2_detox_quality_curves.png
 └── all_phases_summary.png
 ```
+
+The plotting script also writes `.pdf` and `.svg` versions. Use the `.pdf`
+files in the LaTeX poster to keep text and curves vector-sharp.
 
 Proxy training curves can be plotted separately with:
 

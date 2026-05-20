@@ -39,17 +39,24 @@ KNOWN_DIRS = {
 }
 
 CONDITION_COLORS = {
-    "full":        "#2196F3",
-    "target_only": "#FF9800",
-    "visual_only": "#4CAF50",
-    "none":        "#9C27B0",
-    "phase1":      "#E53935",
+    # Okabe-Ito inspired, colorblind-safe palette.
+    "full":        "#0072B2",
+    "target_only": "#E69F00",
+    "visual_only": "#009E73",
+    "none":        "#CC79A7",
+    "phase1":      "#D55E00",
 }
 CONDITION_LABELS = {
-    "full":        "Full [T+V+M]",
-    "target_only": "Target only [T]",
-    "visual_only": "Visual only [V]",
-    "none":        "No cond. [—]",
+    "full":        "Full (T+V+M)",
+    "target_only": "Target only (T)",
+    "visual_only": "Visual only (V)",
+    "none":        "No condition",
+}
+LOWER_IS_BETTER = {
+    "eval_loss",
+    "eval_pred_toxicity_mean",
+    "eval_multimodal_hate_prob_mean",
+    "eval_copy_rate_high",
 }
 
 
@@ -185,6 +192,7 @@ def split_log(log_history):
 
 def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
     """Reproduce all plots from plot_training_curves.py inline."""
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
 
     def smooth(values, window):
         if len(values) <= window:
@@ -195,6 +203,59 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         if len(values) <= window:
             return steps, values
         return steps[window - 1:], smooth(values, window)
+
+    def save_figure(fig, path, dpi=600):
+        """Save a poster/paper-ready raster plus editable vector versions."""
+        path = Path(path)
+        outputs = []
+        png_path = path.with_suffix(".png")
+        fig.savefig(png_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+        outputs.append(png_path.name)
+        for suffix in (".pdf", ".svg"):
+            vector_path = path.with_suffix(suffix)
+            fig.savefig(vector_path, bbox_inches="tight", facecolor="white")
+            outputs.append(vector_path.name)
+        print(f"  Saved: {path.parent}/{{{', '.join(outputs)}}}")
+
+    def format_step(x, _pos):
+        if abs(x) >= 1000:
+            return f"{x / 1000:g}k"
+        return f"{int(x)}" if float(x).is_integer() else f"{x:g}"
+
+    def style_axes(ax, xlabel="Training step", ylabel=None):
+        ax.set_xlabel(xlabel)
+        if ylabel:
+            ax.set_ylabel(ylabel)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+        ax.xaxis.set_major_formatter(FuncFormatter(format_step))
+        ax.grid(axis="y", color="#D0D0D0", linewidth=0.6, alpha=0.65)
+        ax.grid(axis="x", visible=False)
+        ax.margins(x=0.025)
+        ax.tick_params(axis="both", which="major", length=3.5, width=0.8, color="#4A4A4A")
+        for spine in ("left", "bottom"):
+            ax.spines[spine].set_color("#4A4A4A")
+            ax.spines[spine].set_linewidth(0.8)
+
+    def set_padded_ylim(ax, values, ylim=None):
+        if ylim:
+            ax.set_ylim(*ylim)
+            return
+        clean = [float(v) for v in values if np.isfinite(float(v))]
+        if not clean:
+            return
+        lo, hi = min(clean), max(clean)
+        if lo == hi:
+            pad = max(0.01, abs(lo) * 0.05)
+        else:
+            pad = (hi - lo) * 0.10
+        ax.set_ylim(lo - pad, hi + pad)
+
+    def best_point(steps, values, lower_is_better):
+        clean = [(i, float(v)) for i, v in enumerate(values) if np.isfinite(float(v))]
+        if not clean:
+            return None
+        idx, _ = min(clean, key=lambda item: item[1]) if lower_is_better else max(clean, key=lambda item: item[1])
+        return steps[idx], values[idx]
 
     # ── Phase 1 ──────────────────────────────────────────────────────────────
     if phase1_hist and phase1_hist.get("log_history"):
@@ -211,20 +272,23 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             w = max(5, len(losses) // 20)
             sm_steps, sm_losses = smooth_xy(steps, losses, w)
             ax.plot(sm_steps, sm_losses, color=c, linewidth=2.5, label="smoothed")
-        ax.set_title("Training Loss"); ax.set_xlabel("Step"); ax.set_ylabel("Loss"); ax.grid(True, alpha=0.3)
+        ax.set_title("Training Loss")
+        style_axes(ax, ylabel="Loss")
 
         ax = axes[1]
         if eval_logs:
             ax.plot([e["step"] for e in eval_logs], [e["eval_loss"] for e in eval_logs],
                     color=c, linewidth=2, marker="o", markersize=4)
-        ax.set_title("Validation Loss"); ax.set_xlabel("Step"); ax.set_ylabel("Eval Loss"); ax.grid(True, alpha=0.3)
+        ax.set_title("Validation Loss")
+        style_axes(ax, ylabel="Eval Loss")
 
         ax = axes[2]
         rl = [e for e in eval_logs if "eval_rougeL" in e]
         if rl:
             ax.plot([e["step"] for e in rl], [e["eval_rougeL"] for e in rl],
                     color=c, linewidth=2, marker="s", markersize=4)
-        ax.set_title("Validation ROUGE-L"); ax.set_xlabel("Step"); ax.set_ylabel("ROUGE-L"); ax.grid(True, alpha=0.3)
+        ax.set_title("Validation ROUGE-L")
+        style_axes(ax, ylabel="ROUGE-L")
 
         ax = axes[3]
         sta = [e for e in eval_logs if "eval_sta" in e]
@@ -236,7 +300,8 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         else:
             ax.text(0.5, 0.5, "STA not recorded\n(old run)", ha="center", va="center",
                     transform=ax.transAxes, color="#aaa", fontsize=10)
-        ax.set_title("Validation STA\n(↑ = more non-toxic outputs)"); ax.set_xlabel("Step"); ax.set_ylabel("STA"); ax.grid(True, alpha=0.3)
+        ax.set_title("Validation STA\n(↑ = more non-toxic outputs)")
+        style_axes(ax, ylabel="STA")
 
         res = phase1_hist.get("results", {})
         info = []
@@ -249,33 +314,61 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
 
         plt.tight_layout()
         p = out_dir / "phase1_curves.png"
-        fig.savefig(p, dpi=150, bbox_inches="tight")
+        save_figure(fig, p)
         plt.close(fig)
-        print(f"  Saved: {p}")
 
-    def plot_phase2_metric(ax, metric_key, metric_label, marker="o", ylim=None, title=None):
+    def plot_phase2_metric(
+        ax,
+        metric_key,
+        metric_label,
+        marker="o",
+        ylim=None,
+        title=None,
+        highlight_best=False,
+        legend=True,
+    ):
         any_data = False
+        all_values = []
+        lower_is_better = metric_key in LOWER_IS_BETTER
         for h in phase2_hists:
             cond = canonicalize_condition(h.get("condition", "unknown"))
             _, eval_logs = split_log(h["log_history"])
             entries = [e for e in eval_logs if metric_key in e]
             if entries:
+                color = CONDITION_COLORS.get(cond, "#607D8B")
+                steps = [e["step"] for e in entries]
+                values = [e[metric_key] for e in entries]
+                all_values.extend(values)
                 ax.plot(
-                    [e["step"] for e in entries],
-                    [e[metric_key] for e in entries],
-                    color=CONDITION_COLORS.get(cond, "#607D8B"),
-                    linewidth=2,
+                    steps,
+                    values,
+                    color=color,
+                    linewidth=2.2,
                     marker=marker,
-                    markersize=4,
+                    markersize=4.8,
+                    markerfacecolor="white",
+                    markeredgewidth=1.1,
                     label=CONDITION_LABELS.get(cond, cond),
                 )
+                if highlight_best:
+                    point = best_point(steps, values, lower_is_better)
+                    if point is not None:
+                        ax.scatter(
+                            [point[0]],
+                            [point[1]],
+                            color=color,
+                            edgecolor="white",
+                            linewidth=0.7,
+                            marker="*",
+                            s=105,
+                            zorder=4,
+                        )
                 any_data = True
         ax.set_title(title or metric_label)
-        ax.set_xlabel("Step")
-        ax.set_ylabel(metric_label)
-        if ylim:
-            ax.set_ylim(*ylim)
-        ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel=metric_label)
+        set_padded_ylim(ax, all_values, ylim)
+        if legend:
+            ax.legend(loc="best", frameon=True, framealpha=0.94, edgecolor="#D6D6D6")
         return any_data
 
     # ── Phase 2 per-metric comparison ─────────────────────────────────────────
@@ -297,15 +390,52 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             metric_key,
             metric_label,
             ylim=ylim,
-            title=f"Stage 2 — Phase 2: {metric_label} by Condition",
+            title=metric_label,
+            highlight_best=metric_key in {"eval_loss", "eval_detox_quality"},
         )
         if any_data:
-            ax.legend(loc="best", framealpha=0.9); ax.grid(True, alpha=0.3)
             plt.tight_layout()
             p = out_dir / fname
-            fig.savefig(p, dpi=150, bbox_inches="tight")
-            print(f"  Saved: {p}")
+            save_figure(fig, p)
         plt.close(fig)
+
+    # ── Poster/paper figure: the two most important validation curves ──────────
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.25), sharex=True)
+    focus_specs = [
+        ("eval_loss", "Validation loss", "Validation loss (↓)"),
+        ("eval_detox_quality", "Detox quality", "Detox quality (↑)"),
+    ]
+    any_focus_data = False
+    handles = labels = None
+    for idx, (ax, (metric_key, title, ylabel)) in enumerate(zip(axes, focus_specs)):
+        panel_has_data = plot_phase2_metric(
+            ax,
+            metric_key,
+            ylabel,
+            title=f"({chr(ord('a') + idx)}) {title}",
+            highlight_best=True,
+            legend=False,
+        )
+        any_focus_data = any_focus_data or panel_has_data
+        if panel_has_data and handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+    if any_focus_data:
+        if handles and labels:
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.02),
+                ncol=min(4, len(labels)),
+                frameon=False,
+                handlelength=2.0,
+                columnspacing=1.2,
+                markerscale=0.85,
+                borderaxespad=0.0,
+            )
+        plt.tight_layout(rect=(0, 0, 1, 0.90))
+        save_figure(fig, out_dir / "phase2_validation_loss_detox_quality_publication.png")
+    plt.close(fig)
 
     # ── Phase 2 toxicity dashboard ───────────────────────────────────────────
     toxicity_panels = [
@@ -319,7 +449,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
     any_toxicity_data = False
     handles = labels = None
     for ax, (metric_key, metric_label, marker, ylim) in zip(axes.ravel(), toxicity_panels):
-        panel_has_data = plot_phase2_metric(ax, metric_key, metric_label, marker=marker, ylim=ylim)
+        panel_has_data = plot_phase2_metric(ax, metric_key, metric_label, marker=marker, ylim=ylim, legend=False)
         any_toxicity_data = any_toxicity_data or panel_has_data
         if panel_has_data and handles is None:
             handles, labels = ax.get_legend_handles_labels()
@@ -328,8 +458,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)), framealpha=0.9)
         plt.tight_layout(rect=(0, 0.06, 1, 0.96))
         p = out_dir / "phase2_toxicity_curves.png"
-        fig.savefig(p, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {p}")
+        save_figure(fig, p)
     plt.close(fig)
 
     # ── Phase 2 training loss ─────────────────────────────────────────────────
@@ -342,18 +471,24 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
         if train_logs:
             steps  = [e["step"] for e in train_logs]
             losses = [e["loss"] for e in train_logs]
+            ax.plot(
+                steps,
+                losses,
+                color=CONDITION_COLORS.get(cond, "#607D8B"),
+                linewidth=0.8,
+                alpha=0.16,
+            )
             w = max(5, len(losses) // 20)
             sm_steps, sm = smooth_xy(steps, losses, w)
             ax.plot(sm_steps, sm, color=CONDITION_COLORS.get(cond, "#607D8B"),
                     linewidth=2.5, label=CONDITION_LABELS.get(cond, cond))
             any_data = True
     if any_data:
-        ax.set_xlabel("Step"); ax.set_ylabel("Training Loss (smoothed)")
-        ax.legend(loc="best", framealpha=0.9); ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel="Training Loss (moving average)")
+        ax.legend(loc="best", frameon=True, framealpha=0.94, edgecolor="#D6D6D6")
         plt.tight_layout()
         p = out_dir / "phase2_train_loss.png"
-        fig.savefig(p, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {p}")
+        save_figure(fig, p)
     plt.close(fig)
 
     # ── 4-panel summary ───────────────────────────────────────────────────────
@@ -371,7 +506,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
                 w = max(5, len(losses) // 20)
                 sm_steps, sm_losses = smooth_xy(steps, losses, w)
                 ax.plot(sm_steps, sm_losses, color=CONDITION_COLORS["phase1"], linewidth=2.5)
-        ax.set_xlabel("Step"); ax.set_ylabel("Loss"); ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel="Loss")
 
         # P1 eval loss
         ax = axes[1]; ax.set_title("P1 Validation Loss")
@@ -380,7 +515,7 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
             if el:
                 ax.plot([e["step"] for e in el], [e["eval_loss"] for e in el],
                         color=CONDITION_COLORS["phase1"], linewidth=2, marker="o", markersize=4)
-        ax.set_xlabel("Step"); ax.set_ylabel("Eval Loss"); ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel="Eval Loss")
 
         # P2 eval loss
         ax = axes[2]; ax.set_title("P2 Validation Loss")
@@ -392,7 +527,8 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
                 ax.plot([e["step"] for e in entries], [e["eval_loss"] for e in entries],
                         color=CONDITION_COLORS.get(cond, "#607D8B"), linewidth=2, marker="o",
                         markersize=3, label=CONDITION_LABELS.get(cond, cond))
-        ax.set_xlabel("Step"); ax.set_ylabel("Eval Loss"); ax.legend(fontsize=7); ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel="Eval Loss")
+        ax.legend(fontsize=7, frameon=True, framealpha=0.94, edgecolor="#D6D6D6")
 
         # P2 rougeL
         ax = axes[3]; ax.set_title("P2 ROUGE-L")
@@ -404,13 +540,13 @@ def plot_all(phase1_hist, phase2_hists, out_dir, plt, np):
                 ax.plot([e["step"] for e in entries], [e["eval_rougeL"] for e in entries],
                         color=CONDITION_COLORS.get(cond, "#607D8B"), linewidth=2, marker="s",
                         markersize=3, label=CONDITION_LABELS.get(cond, cond))
-        ax.set_xlabel("Step"); ax.set_ylabel("ROUGE-L"); ax.legend(fontsize=7); ax.grid(True, alpha=0.3)
+        style_axes(ax, ylabel="ROUGE-L")
+        ax.legend(fontsize=7, frameon=True, framealpha=0.94, edgecolor="#D6D6D6")
 
         plt.tight_layout()
         p = out_dir / "all_phases_summary.png"
-        fig.savefig(p, dpi=150, bbox_inches="tight")
+        save_figure(fig, p)
         plt.close(fig)
-        print(f"  Saved: {p}")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -512,10 +648,25 @@ def main():
         else:
             import matplotlib
             matplotlib.rcParams.update({
-                "font.size": 10,
+                "font.family": "DejaVu Sans",
+                "font.size": 9.5,
+                "axes.labelsize": 10.5,
+                "axes.titlesize": 11,
+                "axes.titleweight": "semibold",
                 "axes.spines.top": False,
                 "axes.spines.right": False,
+                "axes.linewidth": 0.8,
+                "legend.fontsize": 9,
+                "xtick.labelsize": 9,
+                "ytick.labelsize": 9,
                 "figure.facecolor": "white",
+                "savefig.facecolor": "white",
+                "savefig.dpi": 600,
+                "pdf.fonttype": 42,
+                "ps.fonttype": 42,
+                "svg.fonttype": "none",
+                "lines.solid_capstyle": "round",
+                "lines.solid_joinstyle": "round",
             })
             print(f"\nGenerating plots → {out_dir}")
             plot_all(phase1_hist, phase2_hists, out_dir, plt, np)

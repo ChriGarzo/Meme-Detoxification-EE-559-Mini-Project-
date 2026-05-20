@@ -27,11 +27,6 @@
         very thick,
         color=black!75
     },
-    optional/.style={
-        arrow,
-        dashed,
-        color=black!55
-    }
 ]
 
 \node[box=blue] (stage0) {
@@ -74,7 +69,6 @@
 \draw[arrow] (stage1) -- (stage2);
 \draw[arrow] (stage2) -- (stage3);
 \draw[arrow] (stage3) -- (eval);
-\draw[optional] (stage0.south) |- (stage3.north);
 
 \end{tikzpicture}
 

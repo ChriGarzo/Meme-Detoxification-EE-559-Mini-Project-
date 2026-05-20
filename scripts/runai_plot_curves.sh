@@ -5,7 +5,7 @@ set -e
 # Plot training curves from Stage 2 checkpoints (CPU-only, fast)
 #
 # Reads trainer_state.json / training_history.json from all Stage 2 checkpoint
-# directories on scratch and saves PNG plots to /scratch/hmr_training_plots.
+# directories on scratch and saves PNG/PDF/SVG plots to /scratch/hmr_training_plots.
 #
 # Run this AFTER any Stage 2 training completes.  Works even on runs that
 # predate training_history.json — it falls back to trainer_state.json inside
@@ -36,10 +36,11 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
-CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-}"
-PLOT_SUFFIX="${PLOT_SUFFIX:-}"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-_explicit_detox}"
+PLOT_SUFFIX="${PLOT_SUFFIX:-_explicit_detox}"
 JOB_SUFFIX="${PLOT_SUFFIX//_/-}"
-PLOT_DIR="/scratch/hmr_training_plots${PLOT_SUFFIX}"
+STAGES_ROOT="${STAGES_ROOT:-/scratch/stages}"
+PLOT_DIR="/scratch/plots/hmr_training_plots${PLOT_SUFFIX}"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -86,7 +87,7 @@ runai submit hmr-plot-curves${JOB_SUFFIX} \
         export MPLCONFIGDIR=/tmp/mplconfig-${UID_NUM}
         pip install matplotlib --quiet --break-system-packages 2>/dev/null || true
         python3 ${SCRIPT_PATH} \
-            --scratch_root /scratch \
+            --scratch_root ${STAGES_ROOT} \
             --checkpoint_suffix=\"${CHECKPOINT_SUFFIX}\" \
             --output_dir   ${PLOT_DIR}
     "

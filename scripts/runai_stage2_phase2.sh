@@ -112,10 +112,10 @@ for CONDITION in "${CONDITIONS[@]}"; do
         --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
         --command -- python3 ${TRAIN_SCRIPT} \
             --condition ${CONDITION} \
-            --dataset_dir /scratch/hmr_stage2_dataset \
-            --output_dir /scratch/hmr_stage2_phase2_${CONDITION}${OUTPUT_SUFFIX}_checkpoint \
+            --dataset_dir /scratch/stages/hmr_stage2_dataset \
+            --output_dir /scratch/stages/hmr_stage2_phase2_${CONDITION}${OUTPUT_SUFFIX}_checkpoint \
             --hf_cache /scratch/hf_cache \
-            --stage1_output_dir /scratch/hmr_stage1_output \
+            --stage1_output_dir /scratch/stages/hmr_stage1_output \
             --input_format ${INPUT_FORMAT} \
             "${TASK_PREFIX_ARGS[@]}" \
             --num_train_epochs 5 \

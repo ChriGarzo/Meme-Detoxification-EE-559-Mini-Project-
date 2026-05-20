@@ -122,10 +122,21 @@
     \end{itemize}
 
     \smallgap
-    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.31\linewidth} X}
-        Student & \texttt{facebook/bart-large}, 406M parameters.\\
-        LoRA setup & Rank 32, alpha 64, dropout 0.05; 17M trainable parameters
-        (\(\sim\)4.3\%).\\
+    \textbf{Parameter-efficient adaptation with LoRA.}
+    BART-large is kept frozen while small trainable low-rank matrices are added
+    to the attention and feed-forward projections. Each adapted layer becomes
+    \(W' = W + \frac{\alpha}{r}BA\), so training updates only the adapter path
+    rather than the full 406M-parameter model.
+
+    \smallgap
+    \begin{center}
+        \includestandalone[mode=tex,width=0.72\linewidth]{../lora_adapter_diagram}
+    \end{center}
+
+    \tightgap
+    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.23\linewidth} X}
+        LoRA setup & \(r=32\), \(\alpha=64\), dropout 0.05; 17M trainable
+        parameters (\(\sim\)4.3\%).\\
         Conditions & \texttt{full}, \texttt{target\_only},
         \texttt{visual\_only}, and \texttt{none}.\\
     \end{tabularx}
@@ -178,31 +189,35 @@
     \end{center}
 
     \smallgap
-    \textbf{Reading the trade-off.} BART-large Full gives the strongest student
-    toxicity reduction and improves over DetoxLLM \cite{hallinan2023detoxllm}
-    on Text STA and $\Delta$ toxicity. DetoxLLM and Proxy + BART preserve more surface
-    similarity, but the proxy currently sacrifices detoxification strength. This
-    matches the project goal: distil a useful portion of LLaVA's multimodal
-    rewriting behavior into a much smaller student.
+    \begin{center}
+    \begin{minipage}[t]{0.35\linewidth}
+        \centering
+        \textbf{Qualitative rewrite}\\[-0.15em]
+        \includegraphics[width=0.84\linewidth]{figures/validation_example_9106.jpg}\\[-0.15em]
+        \fcolorbox{black!18}{black!3}{
+            \begin{minipage}{0.88\linewidth}
+            \centering
+            \scriptsize\textbf{Rewrite}\\
+            ``Back in my day, men were men and women were women''
+            \end{minipage}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.59\linewidth}
+        \textbf{Reading the trade-off.} BART-large Full gives the strongest
+        student toxicity reduction and improves over DetoxLLM
+        \cite{hallinan2023detoxllm} on Text STA and $\Delta$ toxicity. DetoxLLM
+        and Proxy + BART preserve more surface similarity, but the proxy
+        currently sacrifices detoxification strength. This matches the project
+        goal: distil a useful portion of LLaVA's multimodal rewriting behavior
+        into a much smaller student.
+    \end{minipage}
+    \end{center}
 
     \smallgap
     \textbf{Compute and emissions.}
     \begin{center}
-    \small
-    \setlength{\tabcolsep}{5pt}
-    \renewcommand{\arraystretch}{1.13}
-    \begin{tabular}{lccc}
-        \toprule
-        Pipeline component & GPU-time & Energy & CO$_2$\\
-        \midrule
-        Stage 0 -- OCR + CLIP filtering & 2.8 h & 0.76 kWh & 26.7 g\\
-        Stage 1A -- LLaVA explanations & 14.1 h & 6.61 kWh & 230.3 g\\
-        Stage 1B -- LLaVA rewrites & 14.5 h & 5.78 kWh & 201.3 g\\
-        Stage 2 -- BART LoRA training & 2.1 h & 0.82 kWh & 28.4 g\\
-        BART finetuned inference & 12.3 min & 0.04 kWh & 1.5 g\\
-        Proxy inference & 3.4 min & 0.01 kWh & 0.5 g\\
-        \bottomrule
-    \end{tabular}
+        \includegraphics[width=0.98\linewidth]{figures/compute_emissions_lollipop.pdf}
     \end{center}
 
     \smallgap

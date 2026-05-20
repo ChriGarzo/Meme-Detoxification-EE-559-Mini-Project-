@@ -14,6 +14,12 @@ set -e
 # Note: Run this AFTER Stage 2 Phase 2 (full condition) has completed.
 #       Trains a lightweight CLIP→BART soft-token MLP to bypass LLaVA at deployment.
 #       Set PROXY_NUM_SOFT_TOKENS=32 to try a longer proxy encoder memory.
+#
+# Optional environment variables:
+#   BART_SUFFIX    suffix appended to the BART checkpoint dir name (default: "")
+#                  e.g. BART_SUFFIX=_explicit_detox reads hmr_stage2_phase2_full_explicit_detox_checkpoint
+#   PROXY_SUFFIX   suffix appended to the proxy output dir name (default: same as BART_SUFFIX)
+#                  e.g. PROXY_SUFFIX=_explicit_detox writes hmr_proxy_checkpoint_explicit_detox
 # =============================================================================
 
 # --- Validate args ---
@@ -31,6 +37,9 @@ GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 PROXY_NUM_SOFT_TOKENS="${PROXY_NUM_SOFT_TOKENS:-16}"
+BART_SUFFIX="${BART_SUFFIX:-}"
+PROXY_SUFFIX="${PROXY_SUFFIX:-${BART_SUFFIX}}"
+JOB_SUFFIX="${PROXY_SUFFIX//_/-}"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -70,10 +79,12 @@ echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Group: ${GROUP_NUM}"
 echo "  Soft tokens: ${PROXY_NUM_SOFT_TOKENS}"
+echo "  BART suffix: ${BART_SUFFIX}"
+echo "  Proxy suffix:${PROXY_SUFFIX}"
 echo "  Image: ${IMAGE}"
 echo ""
 
-runai submit hmr-train-proxy \
+runai submit hmr-train-proxy${JOB_SUFFIX} \
     --run-as-uid ${UID_NUM} \
     --image ${IMAGE} \
     --node-pools a100-40g \
@@ -85,10 +96,10 @@ runai submit hmr-train-proxy \
     --existing-pvc claimname=course-ee-559-shared-ro,path=/shared-ro \
     --existing-pvc claimname=course-ee-559-shared-rw,path=/shared-rw \
     --command -- python3 ${SCRIPT_PATH} \
-        --stage1_output_dir /scratch/hmr_stage1_output \
-        --stage2_dataset_dir /scratch/hmr_stage2_dataset \
-        --bart_checkpoint_dir /scratch/hmr_stage2_phase2_full_checkpoint \
-        --output_dir /scratch/hmr_proxy_checkpoint \
+        --stage1_output_dir /scratch/stages/hmr_stage1_output \
+        --stage2_dataset_dir /scratch/stages/hmr_stage2_dataset \
+        --bart_checkpoint_dir /scratch/stages/hmr_stage2_phase2_full${BART_SUFFIX}_checkpoint \
+        --output_dir /scratch/stages/hmr_proxy_checkpoint${PROXY_SUFFIX} \
         --hf_cache /scratch/hf_cache \
         --num_train_epochs 20 \
         --batch_size 64 \
