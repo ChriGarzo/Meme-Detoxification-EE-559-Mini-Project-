@@ -154,10 +154,11 @@
 
     \smallgap
     All datasets are filtered to retain meme-like images only. The final Stage 2
-    supervision contains 3,578 clean pseudo-rewrite pairs from 7,918 loaded
-    LLaVA rows, split into 3,220 train and 358 validation examples. Combining
-    curated and noisy sources exposes the model to diverse toxicity types and
-    improves generalization pressure.
+    supervision contains 4,127 clean pseudo-rewrite pairs from 7,918 loaded
+    LLaVA rows. These are split into \textbf{3,578 train}, \textbf{269 validation},
+    and \textbf{280 test} examples. The train split fine-tunes the BART student;
+    validation drives early stopping and hyperparameter selection; the test split
+    is held out and provides all reported metrics.
     \end{block}
 
 \end{column}
@@ -166,7 +167,7 @@
 \begin{column}{\colwidth}
 
     \begin{block}{Validation}
-    \textbf{Quality on 358 validation memes.} Text STA is the mean non-toxic
+    \textbf{Quality on 280 held-out test memes.} Text STA is the mean non-toxic
     probability from a RoBERTa toxicity classifier; $\Delta$ toxicity is the
     improvement over the original meme text; SIM is BERTScore F1; CLIP measures
     image--text alignment.
@@ -180,10 +181,11 @@
         \toprule
         System & Text STA & $\Delta$ toxicity & SIM & CLIP\\
         \midrule
-        LLaVA-Next Teacher & \textbf{0.9517} & \textbf{0.2804} & 0.3938 & 0.6253\\
-        DetoxLLM baseline & 0.8894 & 0.2182 & 0.4202 & 0.6251\\
-        BART-large Full & 0.9261 & 0.2548 & 0.2991 & 0.6236\\
-        Proxy + BART & 0.8084 & 0.1372 & \textbf{0.5527} & \textbf{0.6312}\\
+        LLaVA-Next Teacher & \textbf{0.990} & \textbf{0.234} & 0.472 & 0.636\\
+        DetoxLLM baseline & 0.940 & 0.184 & 0.443 & 0.634\\
+        BART-large (no fine-tuning) & 0.973 & 0.217 & $-$0.061 & 0.622\\
+        BART-large FT Full (ours) & 0.959 & 0.203 & 0.340 & 0.628\\
+        CLIP Proxy + BART (ours) & 0.879 & 0.123 & \textbf{0.600} & \textbf{0.639}\\
         \bottomrule
     \end{tabular}
     \end{center}
@@ -204,13 +206,14 @@
     \end{minipage}
     \hfill
     \begin{minipage}[t]{0.59\linewidth}
-        \textbf{Reading the trade-off.} BART-large Full gives the strongest
+        \textbf{Reading the trade-off.} BART-large FT Full gives the strongest
         student toxicity reduction and improves over DetoxLLM
-        \cite{hallinan2023detoxllm} on Text STA and $\Delta$ toxicity. DetoxLLM
-        and Proxy + BART preserve more surface similarity, but the proxy
-        currently sacrifices detoxification strength. This matches the project
-        goal: distil a useful portion of LLaVA's multimodal rewriting behavior
-        into a much smaller student.
+        \cite{hallinan2023detoxllm} on Text STA and $\Delta$ toxicity. Without
+        fine-tuning, BART achieves high STA but collapses semantic similarity
+        (SIM $= -0.06$), showing that fine-tuning is essential for meaning
+        preservation. The CLIP Proxy reaches best-in-class SIM (0.60) at the
+        cost of detoxification strength, revealing a clear fidelity--detoxification
+        trade-off.
     \end{minipage}
     \end{center}
 
@@ -229,7 +232,7 @@
     \smallgap
     \begin{center}
     \begin{tabular}{@{}c@{\hspace{2.6cm}}c@{\hspace{2.6cm}}c@{}}
-        \shortstack{\textbf{+3.67 pts}\\Text STA vs. DetoxLLM} &
+        \shortstack{\textbf{+1.88 pts}\\Text STA vs. DetoxLLM} &
         \shortstack{\textbf{76.6\(\times\)}\\BART speedup vs. LLaVA} &
         \shortstack{\textbf{496 g}\\total measured CO$_2$}\\
     \end{tabular}
