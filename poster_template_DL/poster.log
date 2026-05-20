@@ -1,4 +1,4 @@
-This is LuaHBTeX, Version 1.17.1 (MiKTeX 24.1) (format=lualatex 2026.3.23)  20 MAY 2026 16:48
+This is LuaHBTeX, Version 1.17.1 (MiKTeX 24.1) (format=lualatex 2026.3.23)  20 MAY 2026 17:06
  restricted system commands enabled.
 **./poster.tex
 (./poster.tex
@@ -1067,76 +1067,13 @@ LaTeX Info: Redefining \addtolength on input line 81.
 )
 luaotfload | cache : Lookup cache loaded from C:/Users/Christian/AppData/Local/M
 iKTeX/luatex-cache/generic/names/luaotfload-lookup-cache.luc.
-luaotfload | db : Reload initiated (formats: otf,ttf,ttc); reason: Font "Raleway
-" not found.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-
-! Package fontspec Error: The font "Raleway" cannot be found.
-
-For immediate help type H <return>.
- ...                                              
-                                                  
-l.18 \newfontfamily
-                 \Lato[Ligatures=TeX]{Lato}
-
-A font might not be found for many reasons.
- Check the spelling, where the font is installed etc. etc.
-
- When in doubt, ask someone for help!
-
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-luaotfload | aux : no font with id 0
-luaotfload | aux : no font with id 0
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 
 Package fontspec Info: Could not resolve font "Raleway/BI" (it probably
 (fontspec)             doesn't exist).
 
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 
 Package fontspec Info: Could not resolve font "Raleway/B" (it probably doesn't
 (fontspec)             exist).
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-
-Package fontspec Info: Could not resolve font "Raleway/I" (it probably doesn't
-(fontspec)             exist).
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-
-! Package fontspec Error: The font "Raleway" cannot be found.
-
-For immediate help type H <return>.
- ...                                              
-                                                  
-l.18 \newfontfamily
-                 \Lato[Ligatures=TeX]{Lato}
-
-A font might not be found for many reasons.
- Check the spelling, where the font is installed etc. etc.
-
- When in doubt, ask someone for help!
-
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-
-! Package fontspec Error: The font "Raleway" cannot be found.
-
-For immediate help type H <return>.
- ...                                              
-                                                  
-l.18 \newfontfamily
-                 \Lato[Ligatures=TeX]{Lato}
-
-A font might not be found for many reasons.
- Check the spelling, where the font is installed etc. etc.
-
- When in doubt, ask someone for help!
-
 
 
 Package fontspec Info: Font family 'Raleway(0)' created for font 'Raleway'
@@ -1146,16 +1083,24 @@ Package fontspec Info: Font family 'Raleway(0)' created for font 'Raleway'
 (fontspec)             series/shapes:
 (fontspec)              
 (fontspec)             - 'normal' (m/n) with NFSS spec.:
-(fontspec)             <->"Raleway:mode=node;language=dflt;+tlig;"
-(fontspec)             - 'small caps'  (m/sc) with NFSS spec.: 
+(fontspec)             <->"Raleway:mode=node;script=latn;language=dflt;+tlig;"
+(fontspec)             - 'small caps'  (m/sc) with NFSS spec.:
+(fontspec)             <->"Raleway:mode=node;script=latn;language=dflt;+tlig;+s
+mcp;"
+(fontspec)             - 'italic' (m/it) with NFSS spec.:
+(fontspec)             <->"Raleway/I:mode=node;script=latn;language=dflt;+tlig;
+"
+(fontspec)             - 'italic small caps'  (m/scit) with NFSS spec.:
+(fontspec)             <->"Raleway/I:mode=node;script=latn;language=dflt;+tlig;
++smcp;"
 
-luaotfload | aux : font no 25 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 31 (nil) does not define feature smcp for script latn
  with language dflt
-luaotfload | aux : font no 26 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 32 (nil) does not define feature smcp for script latn
  with language dflt
-luaotfload | aux : font no 27 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 33 (nil) does not define feature smcp for script latn
  with language dflt
-luaotfload | aux : font no 28 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 34 (nil) does not define feature smcp for script latn
  with language dflt
 
 Package fontspec Info: Font family 'Lato(0)' created for font 'Lato' with
@@ -1180,13 +1125,13 @@ Package fontspec Info: Font family 'Lato(0)' created for font 'Lato' with
 
 (C:/Users/Christian/AppData/Local/Programs/MiKTeX/tex/latex/beamer/beamerfontth
 emeprofessionalfonts.sty)
+luaotfload | aux : font no 37 (nil) does not define feature smcp for script latn
+ with language dflt
 luaotfload | aux : font no 31 (nil) does not define feature smcp for script latn
  with language dflt
-luaotfload | aux : font no 25 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 38 (nil) does not define feature smcp for script latn
  with language dflt
-luaotfload | aux : font no 32 (nil) does not define feature smcp for script latn
- with language dflt
-luaotfload | aux : font no 27 (nil) does not define feature smcp for script latn
+luaotfload | aux : font no 33 (nil) does not define feature smcp for script latn
  with language dflt
 
 Package fontspec Info: Font family 'Lato(1)' created for font 'Lato' with
@@ -1692,38 +1637,13 @@ Dictionary: translator-numbers-dictionary, Language: English
 or-theorem-dictionary-English.dict
 Dictionary: translator-theorem-dictionary, Language: English 
 ) (./poster.nav)
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/m/n/18.66=Raleway:mode=node;language=dflt;+tlig; at 18.66p
-t not loadable: metric data not found or bad.
-<to be read again> 
-relax 
-l.57 \begin{document}
-                   
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/m/n/9=Raleway:mode=node;language=dflt;+tlig; at 9pt not lo
-adable: metric data not found or bad.
-<to be read again> 
-relax 
-l.57 \begin{document}
-                   
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
-
 File: logos/mints.png Graphic file (type png)
 <use logos/mints.png>
 Package luatex.def Info: logos/mints.png  used on input line 57.
 (luatex.def)             Requested size: 179.61316pt x 75.39963pt.
 LaTeX Font Info:    Trying to load font information for OT1+lmr on input line 5
 7.
+
 (C:/Users/Christian/AppData/Local/Programs/MiKTeX/tex/latex/lm/ot1lmr.fd
 File: ot1lmr.fd 2015/05/01 v1.6.1 Font defs for Latin Modern
 )
@@ -1749,54 +1669,17 @@ LaTeX Font Info:    Trying to load font information for U+rsfs on input line 57
 (C:/Users/Christian/AppData/Local/Programs/MiKTeX/tex/latex/jknappen/ursfs.fd
 File: ursfs.fd 1998/03/24 rsfs font definition file (jk)
 )
+luaotfload | db : Reload initiated (formats: otf,ttf,ttc); reason: Font "rsfs10"
+ not found.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
 luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/m/n/46.44=Raleway:mode=node;language=dflt;+tlig; at 46.44p
-t not loadable: metric data not found or bad.
-<to be read again> 
-relax 
-l.57 \begin{document}
-                   
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
-
 
 LaTeX Font Warning: Font shape `TU/Raleway(0)/b/n' undefined
 (Font)              using `TU/Raleway(0)/m/n' instead on input line 57.
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/b/n/46.44=Raleway:mode=node;language=dflt;+tlig; at 46.44p
-t not loadable: metric data not found or bad.
-<to be read again> 
-relax 
-l.57 \begin{document}
-                   
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
-
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/m/n/26.87=Raleway:mode=node;language=dflt;+tlig; at 26.87p
-t not loadable: metric data not found or bad.
-<to be read again> 
-relax 
-l.57 \begin{document}
-                   
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
 
 File: logos/epfl.png Graphic file (type png)
 <use logos/epfl.png>
@@ -1810,19 +1693,6 @@ File: logos/epfl.png Graphic file (type png)
 <use logos/epfl.png>
 Package luatex.def Info: logos/epfl.png  used on input line 279.
 (luatex.def)             Requested size: 460.0443pt x 199.16928pt.
-luaotfload | resolve : sequence of 3 lookups yielded nothing appropriate.
-! Font \TU/Raleway(0)/b/n/22.4=Raleway:mode=node;language=dflt;+tlig; at 22.4pt 
-not loadable: metric data not found or bad.
-<to be read again> 
-relax 
-l.279 \end{frame}
-               
-I wasn't able to read the size data for this font,
-so I will ignore the font specification.
-[Wizards can fix TFM files using TFtoPL/PLtoTF.]
-You might try inserting a different font spec;
-e.g., type `I\font<same font id>=<substitute font name>'.
-
 
 LaTeX Warning: Citation `kiela2020hateful' on page 1 undefined on input line 27
 9.
@@ -1913,7 +1783,7 @@ line 279.
 (luatex.def)             Requested size: 745.32294pt x 361.03456pt.
 No file poster.bbl.
 
-Overfull \vbox (300.85835pt too high) detected at line 279
+Overfull \vbox (58.73692pt too high) detected at line 279
  []
 
 File: logos/mints.png Graphic file (type png)
@@ -1924,223 +1794,8 @@ File: logos/epfl.png Graphic file (type png)
 <use logos/epfl.png>
 Package luatex.def Info: logos/epfl.png  used on input line 279.
 (luatex.def)             Requested size: 460.0443pt x 199.16928pt.
-[1
-Missing character: There is no F (U+0046) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no m (U+006D) in font nullfont!
-Missing character: There is no C (U+0043) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no h (U+0068) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no p (U+0070) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no D (U+0044) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no x (U+0078) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no f (U+0066) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no c (U+0063) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no : (U+003A) in font nullfont!
-Missing character: There is no R (U+0052) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no w (U+0077) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no g (U+0067) in font nullfont!
-Missing character: There is no H (U+0048) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no m (U+006D) in font nullfont!
-Missing character: There is no f (U+0066) in font nullfont!
-Missing character: There is no u (U+0075) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no M (U+004D) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no m (U+006D) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no A (U+0041) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no x (U+0078) in font nullfont!
-Missing character: There is no D (U+0044) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no ' (U+0027) in font nullfont!
-Missing character: There is no O (U+004F) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no , (U+002C) in font nullfont!
-Missing character: There is no C (U+0043) in font nullfont!
-Missing character: There is no h (U+0068) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no G (U+0047) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no z (U+007A) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no , (U+002C) in font nullfont!
-Missing character: There is no D (U+0044) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no L (U+004C) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no u (U+0075) in font nullfont!
-Missing character: There is no z (U+007A) in font nullfont!
-Missing character: There is no z (U+007A) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no G (U+0047) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no u (U+0075) in font nullfont!
-Missing character: There is no p (U+0070) in font nullfont!
-Missing character: There is no 3 (U+0033) in font nullfont!
-Missing character: There is no 1 (U+0031) in font nullfont!
-Missing character: There is no E (U+0045) in font nullfont!
-Missing character: There is no E (U+0045) in font nullfont!
-Missing character: There is no - (U+002D) in font nullfont!
-Missing character: There is no 5 (U+0035) in font nullfont!
-Missing character: There is no 5 (U+0035) in font nullfont!
-Missing character: There is no 9 (U+0039) in font nullfont!
-Missing character: There is no : (U+003A) in font nullfont!
-Missing character: There is no D (U+0044) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no p (U+0070) in font nullfont!
-Missing character: There is no L (U+004C) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no g (U+0067) in font nullfont!
-Missing character: There is no , (U+002C) in font nullfont!
-Missing character: There is no E (U+0045) in font nullfont!
-Missing character: There is no P (U+0050) in font nullfont!
-Missing character: There is no F (U+0046) in font nullfont!
-Missing character: There is no L (U+004C) in font nullfont!
-Missing character: There is no , (U+002C) in font nullfont!
-Missing character: There is no 2 (U+0032) in font nullfont!
-Missing character: There is no 0 (U+0030) in font nullfont!
-Missing character: There is no 2 (U+0032) in font nullfont!
-Missing character: There is no 6 (U+0036) in font nullfont!
+[1{C:/Users/Christian/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map}
 
-Missing character: There is no P (U+0050) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no b (U+0062) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no m (U+006D) in font nullfont!
-Missing character: There is no d (U+0064) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no f (U+0066) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-{C:/Users/Christian/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map}
-Missing character: There is no R (U+0052) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no d (U+0064) in font nullfont!
-Missing character: There is no w (U+0077) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no k (U+006B) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no M (U+004D) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no h (U+0068) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no d (U+0064) in font nullfont!
-Missing character: There is no D (U+0044) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no V (U+0056) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no d (U+0064) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no L (U+004C) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no m (U+006D) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no a (U+0061) in font nullfont!
-Missing character: There is no t (U+0074) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no C (U+0043) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no c (U+0063) in font nullfont!
-Missing character: There is no l (U+006C) in font nullfont!
-Missing character: There is no u (U+0075) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
-Missing character: There is no i (U+0069) in font nullfont!
-Missing character: There is no o (U+006F) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no R (U+0052) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no f (U+0066) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no r (U+0072) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no n (U+006E) in font nullfont!
-Missing character: There is no c (U+0063) in font nullfont!
-Missing character: There is no e (U+0065) in font nullfont!
-Missing character: There is no s (U+0073) in font nullfont!
 <./logos/mints.png><./logos/epfl.png><./figures/validation_example_9106.jpg><./f
 igures/compute_emissions_lollipop.pdf>]
 \tf@nav=\write6
@@ -2169,17 +1824,17 @@ Package rerunfilecheck Info: File `poster.out' has not changed.
 )
 
 Here is how much of LuaTeX's memory you used:
- 34473 strings out of 476497
- 381789,1977958 words of node,token memory allocated
- 95182 words of node memory still in use:
-   730 hlist, 75 vlist, 98 rule, 524 disc, 115 local_par, 76 math, 2405 glue, 12
-97 kern, 246 penalty, 6355 glyph, 1973 attribute, 100 glue_spec, 1973 attribute_
+ 34481 strings out of 476497
+ 381786,1977958 words of node,token memory allocated
+ 96236 words of node memory still in use:
+   731 hlist, 75 vlist, 98 rule, 551 disc, 115 local_par, 76 math, 2446 glue, 13
+47 kern, 248 penalty, 6386 glyph, 1970 attribute, 100 glue_spec, 1970 attribute_
 list, 4 write, 586 pdf_literal, 308 pdf_colorstack, 6 pdf_setmatrix, 8 pdf_save,
  8 pdf_restore nodes
-   avail lists: 1:1,2:388,3:2580,4:1047,5:3921,6:348,7:26620,8:11,9:2820,10:16,1
-1:1572
- 55347 multiletter control sequences out of 65536+600000
- 161 fonts using 20062215 bytes
+   avail lists: 1:1,2:382,3:2586,4:1047,5:4071,6:348,7:26836,8:11,9:2823,10:16,1
+1:1653
+ 55355 multiletter control sequences out of 65536+600000
+ 172 fonts using 21930687 bytes
  128i,21n,116p,540b,1797s stack positions out of 10000i,1000n,20000p,200000b,200000s
 {C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/enc/dvips/lm/lm-rm.enc}<
 //?/c:/users/christian/appdata/local/programs/miktex/fonts/opentype/public/lm/lm
@@ -2188,19 +1843,21 @@ vips/lm/lm-mathit.enc}{C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/en
 c/dvips/lm/lm-mathsy.enc}<C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts
 /truetype/typoland/lato/Lato-Regular.ttf><C:/Users/Christian/AppData/Local/Progr
 ams/MiKTeX/fonts/truetype/typoland/lato/Lato-Light.ttf><C:/Users/Christian/AppDa
-ta/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi10.pfb><C:/Users/Christian/Ap
-pData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi12.pfb><C:/Users/Christian
-/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi6.pfb><C:/Users/Christi
-an/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi9.pfb><C:/Users/Chris
-tian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr10.pfb><C:/Users/Chr
-istian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr12.pfb><C:/Users/C
-hristian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr17.pfb><C:/Users
-/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr8.pfb><C:/User
-s/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr9.pfb><C:/Use
-rs/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmsy10.pfb>
-Output written on poster.pdf (1 page, 499099 bytes).
+ta/Local/Microsoft/Windows/Fonts/raleway-variablefont_wght.ttf><C:/Users/Christi
+an/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi10.pfb><C:/Users/Chri
+stian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi12.pfb><C:/Users/C
+hristian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi6.pfb><C:/Users
+/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmmi9.pfb><C:/Use
+rs/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr10.pfb><C:/U
+sers/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr12.pfb><C:
+/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr17.pfb><
+C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr8.pfb>
+<C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmr9.pfb
+><C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/public/lm/lmsy10.
+pfb>
+Output written on poster.pdf (1 page, 511535 bytes).
 
-PDF statistics: 110 PDF objects out of 1000 (max. 8388607)
+PDF statistics: 117 PDF objects out of 1000 (max. 8388607)
  3 named destinations out of 1000 (max. 131072)
  16 words of extra memory for PDF output out of 10000 (max. 100000000)
 
