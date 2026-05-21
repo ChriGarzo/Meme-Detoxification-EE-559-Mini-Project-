@@ -1,4 +1,4 @@
-\documentclass[tikz,border=4pt]{standalone}
+\documentclass[tikz,border=5pt]{standalone}
 
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -9,63 +9,67 @@
 
 \begin{tikzpicture}[
     every node/.style={font=\sffamily},
-    arrow/.style={-{Latex[length=2mm,width=1.5mm]}, thick, draw=black!70},
+    arrow/.style={-{Latex[length=2.7mm,width=1.9mm]}, line width=0.7pt, draw=black!70},
+    adapterarrow/.style={-{Latex[length=2.7mm,width=1.9mm]}, line width=0.9pt, draw=blue!65!black},
+    frozen/.style={
+        rectangle,
+        rounded corners=5pt,
+        draw=black!45,
+        fill=black!6,
+        line width=0.75pt,
+        align=center,
+        minimum width=2.9cm,
+        minimum height=1.0cm,
+        font=\sffamily\scriptsize
+    },
     train/.style={
         rectangle,
         rounded corners=5pt,
         draw=blue!70!black,
-        fill=blue!9,
-        thick,
+        fill=blue!8,
+        line width=0.9pt,
         align=center,
-        minimum width=2.05cm,
-        minimum height=0.86cm,
-        font=\sffamily\scriptsize
-    },
-    frozen/.style={
-        rectangle,
-        rounded corners=5pt,
-        draw=black!42,
-        fill=black!6,
-        thick,
-        align=center,
-        minimum width=2.45cm,
-        minimum height=0.95cm,
+        minimum width=2.35cm,
+        minimum height=0.92cm,
         font=\sffamily\scriptsize
     },
     sum/.style={
         circle,
-        draw=black!55,
+        draw=black!60,
         fill=white,
-        thick,
-        inner sep=1.5pt,
+        line width=0.75pt,
+        inner sep=2pt,
         font=\sffamily\scriptsize
     },
-    note/.style={font=\sffamily\tiny, align=center, text=black!70}
+    label/.style={font=\sffamily\tiny, align=center, text=black!70},
+    signal/.style={font=\sffamily\scriptsize, align=center}
 ]
 
-\node[note] (x) {$x$};
-\node[frozen, right=0.78cm of x] (w) {
-    Frozen BART\\linear layer $W$
+\node[signal] (x) {$x$};
+\node[frozen, right=1.05cm of x] (w) {
+    Frozen BART\\projection $W$
 };
-\node[train, above right=0.36cm and 0.82cm of x] (a) {
+\node[sum, right=1.25cm of w] (plus) {$+$};
+\node[signal, right=0.8cm of plus] (y) {$y$};
+
+\node[train, above=1.05cm of w] (a) {
     LoRA $A$\\$d \rightarrow r$
 };
-\node[train, right=0.55cm of a] (b) {
+\node[train, above=1.05cm of plus] (b) {
     LoRA $B$\\$r \rightarrow d$
 };
-\node[sum, right=0.78cm of w] (plus) {$+$};
-\node[note, right=0.65cm of plus] (y) {$y$};
 
 \draw[arrow] (x) -- (w);
-\draw[arrow] (w) -- node[below, note] {$Wx$} (plus);
-\draw[arrow] (x.north) |- (a.west);
-\draw[arrow] (a) -- (b);
-\draw[arrow] (b.south) |- node[pos=0.72, above, note] {$\frac{\alpha}{r}BAx$} (plus.north);
+\draw[arrow] (w) -- node[below,label] {$Wx$} (plus);
 \draw[arrow] (plus) -- (y);
 
-\node[note, below=0.24cm of w, text width=5.7cm] {
-    Only the low-rank adapters are updated; the 406M BART weights stay frozen.
-    Here $r=32$, $\alpha=64$, giving 17M trainable parameters.
+\draw[adapterarrow] (x.north) |- (a.west);
+\draw[adapterarrow] (a.east) -- (b.west);
+\draw[adapterarrow] (b.south) -- (plus.north);
+
+\node[label, below=0.40cm of w, text width=6.8cm] {
+    Effective layer: \(W'x = Wx + \frac{\alpha}{r}BAx\). Only \(A\) and \(B\)
+    are trained; the 406M BART weights remain frozen.
 };
 
 \end{tikzpicture}

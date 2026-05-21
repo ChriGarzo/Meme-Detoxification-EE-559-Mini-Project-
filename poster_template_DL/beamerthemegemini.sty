@@ -118,7 +118,7 @@
   \begin{beamercolorbox}{headline}
     \begin{columns}
       \begin{column}{\maxlogowidth}
-        \vskip5ex
+        \vskip2.5ex
         \ifdefined\insertlogoleft
         \vspace*{\fill}
         \hspace{10ex}
@@ -129,20 +129,20 @@
       \end{column}
       \begin{column}{\dimexpr\paperwidth-\maxlogowidth-\maxlogowidth}
         \usebeamerfont{headline}
-        \vskip3ex
+        \vskip1.5ex
         \centering
         \ifx \inserttitle \empty \else
-        {\usebeamerfont{headline title}\usebeamercolor[fg]{headline title}\inserttitle\\[0.5ex]}
+        {\usebeamerfont{headline title}\usebeamercolor[fg]{headline title}\inserttitle\\[0.2ex]}
         \fi
         \ifx \beamer@shortauthor \empty \else
-        {\usebeamerfont{headline author}\usebeamercolor[fg]{headline author}\insertauthor\\[1ex]}
+        {\usebeamerfont{headline author}\usebeamercolor[fg]{headline author}\insertauthor\\[0.4ex]}
         \fi
         \ifx \insertinstitute \empty \else
-        {\usebeamerfont{headline institute}\usebeamercolor[fg]{headline institute}\insertinstitute\\[1ex]}
+        {\usebeamerfont{headline institute}\usebeamercolor[fg]{headline institute}\insertinstitute\\[0.2ex]}
         \fi
       \end{column}
       \begin{column}{\maxlogowidth}
-        \vskip5ex
+        \vskip2.5ex
         \ifdefined\insertlogoright
         \vspace*{\fill}
         \raggedleft
@@ -152,7 +152,7 @@
         \else\fi
       \end{column}
     \end{columns}
-    \vspace{5ex}
+    \vspace{2ex}
     \ifbeamercolorempty[bg]{headline rule}{}{
       \begin{beamercolorbox}[wd=\paperwidth,colsep=0.5ex]{headline rule}\end{beamercolorbox}
     }
@@ -269,4 +269,3 @@
 }
 \setbeamertemplate{theorem end}{}
 \makeatother
-
