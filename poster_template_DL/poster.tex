@@ -95,7 +95,9 @@
     The research hypothesis is that a large multimodal teacher can explain why
     a meme is harmful and generate safer pseudo-rewrites, then transfer this
     context-aware rewriting behavior to a compact BART-large student for
-    efficient deployment.
+    efficient deployment. We additionally test a CLIP-based proxy that predicts
+    BART encoder soft tokens from image--text features, reducing reliance on a
+    7B vision-language model at inference time.
     \end{block}
 
     \begin{block}{Related works}
@@ -115,8 +117,10 @@
         \item \textbf{Our gap.} We use LLaVA-Next's multimodal understanding as
         a teacher to produce target groups, visual evidence, implicit meanings,
         and pseudo-detoxified rewrites \cite{liu2024llava}. These labels are
-        distilled into a lightweight BART-large student, enabling
-        context-aware rewriting at much lower inference cost.
+        distilled into a lightweight BART-large student. We also introduce a
+        proxy path that maps CLIP image/text embeddings to BART encoder memory,
+        enabling context-aware rewriting without running LLaVA at inference
+        time.
     \end{itemize}
     \end{block}
 
