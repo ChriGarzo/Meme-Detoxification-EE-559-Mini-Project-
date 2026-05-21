@@ -1,5 +1,5 @@
 # Fdb version 4
-["pdflatex"] 1779297005.74665 "poster.tex" "poster.pdf" "poster" 1779297007.18425 0
+["pdflatex"] 1779352924.57929 "poster.tex" "poster.pdf" "poster" 1779352926.00657 0
   "../architecture_diagram.tex" 1779294608.86012 1488 dd7914f8045b6184252e7daccec2ffb2 ""
   "../lora_adapter_diagram.tex" 1779295268.83876 2061 e8b74aea1d1493887675da896c999035 ""
   "/Users/darioliuzzo/Library/texlive/2025/texmf-var/luatex-cache/generic/fonts/otl/lato-bold.luc" 1779115807.20367 1525262 4639a8e784131b4198c23da0564bfd16 ""
@@ -370,10 +370,10 @@
   "logos/mints.png" 1779176671.42071 88184 e010a7cecaeda52bc9bb39f38a568ed6 ""
   "macros.tex" 1746707188 1533 9ce4f0afae374cf916547c3ff43ab238 ""
   "packages.tex" 1779293878.95796 405 f2a0707d592f4e1d6569564c76231628 ""
-  "poster.aux" 1779297007.04694 1699 85120d0ae80dbe618f7b8757e88ef2f0 "pdflatex"
-  "poster.nav" 1779297007.04772 307 9e520c26371a1250ff9fc1fe87f9c655 "pdflatex"
-  "poster.out" 1779297006.63123 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
-  "poster.tex" 1779296998.27437 13319 aefc5ea1525403ac655ecec229d05370 ""
+  "poster.aux" 1779352925.86897 1699 85120d0ae80dbe618f7b8757e88ef2f0 "pdflatex"
+  "poster.nav" 1779352925.86948 307 9e520c26371a1250ff9fc1fe87f9c655 "pdflatex"
+  "poster.out" 1779352925.42698 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
+  "poster.tex" 1779352912.00891 14250 b48e3fe06554c2d5c586d2ad6cb28598 ""
   (generated)
   "poster.aux"
   "poster.log"

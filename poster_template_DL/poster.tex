@@ -122,16 +122,16 @@
 
     \begin{block}{Datasets}
     \small
-    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.15\linewidth} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{0.25\linewidth}}
+    \begin{tabularx}{\linewidth}{>{\bfseries}p{0.14\linewidth} >{\raggedright\arraybackslash}X >{\scriptsize\raggedright\arraybackslash}p{0.36\linewidth}}
         \toprule
         Dataset & Scope & Licence obtained\\
         \midrule
         HarMeme & \(\sim\)3,500 COVID-19 and US-politics memes with harmful/non-harmful labels
-        \cite{pramanick2021harmeme}. & \rule{0.88\linewidth}{0.35pt}\\
+        \cite{pramanick2021harmeme}. & Licensed under CC~4.0, in accordance with ACL requirements for Resource \& Evaluation papers since 2016.\\
         MAMI & 10,000 misogynist memes from Twitter \cite{fersini2022mami}. &
-        \rule{0.88\linewidth}{0.35pt}\\
+        Licensed under CC~4.0, in accordance with ACL requirements for Resource \& Evaluation papers since 2016.\\
         MMHS150K & \(\sim\)150,000 heterogeneous Twitter image--text posts
-        \cite{gomez2020multimodal}. & \rule{0.88\linewidth}{0.35pt}\\
+        \cite{gomez2020multimodal}. & The authors clearly intended research use: they published download links and described the dataset as available for further research in the abstract and Dataset section.\\
         \bottomrule
     \end{tabularx}
 
@@ -314,31 +314,38 @@
     environments.
     \end{block}
 
+\end{column}
+\separatorcolumn
+
+\end{columns}
+
+\vspace{-0.2em}
+\begin{columns}[t]
+\separatorcolumn
+\begin{column}{\dimexpr2\colwidth+\sepwidth\relax}
     \begin{block}{References}
-    \vspace{-0.6em}
-    \begin{multicols}{2}
+    \vspace{-0.9em}
+    \begin{multicols}{3}
     \tiny
     \begin{thebibliography}{9}
         \setlength{\itemsep}{0pt}
         \setlength{\parskip}{0pt}
         \setlength{\parsep}{0pt}
-        \bibitem{kiela2020hateful} Kiela et al., \emph{The Hateful Memes Challenge}, NeurIPS 2020.
-        \bibitem{li2019visualbert} Li et al., \emph{VisualBERT}, arXiv 2019.
-        \bibitem{radford2021learning} Radford et al., \emph{CLIP}, ICML 2021.
-        \bibitem{logacheva2022paradetox} Logacheva et al., \emph{ParaDetox}, ACL 2022.
-        \bibitem{liu2024llava} Liu et al., \emph{LLaVA-NeXT}, arXiv 2024.
-        \bibitem{pramanick2021harmeme} Pramanick et al., \emph{HarMeme}, EMNLP 2021.
-        \bibitem{fersini2022mami} Fersini et al., \emph{MAMI}, SemEval 2022.
-        \bibitem{gomez2020multimodal} Gomez et al., \emph{Multimodal Hate Speech}, WACV 2020.
-        \bibitem{hallinan2023detoxllm} Hallinan et al., \emph{DetoxLLM}, 2023.
+        \bibitem{kiela2020hateful} Kiela et al., \emph{The Hateful Memes Challenge: Detecting Hate Speech in Multimodal Memes}, NeurIPS, 2020.
+        \bibitem{li2019visualbert} Li et al., \emph{VisualBERT: A Simple and Performant Baseline for Vision and Language}, arXiv:1908.03557, 2019.
+        \bibitem{radford2021learning} Radford et al., \emph{Learning Transferable Visual Models From Natural Language Supervision}, ICML, 2021.
+        \bibitem{logacheva2022paradetox} Logacheva et al., \emph{ParaDetox: Detoxification with Parallel Data}, ACL, 2022.
+        \bibitem{liu2024llava} Liu et al., \emph{LLaVA-NeXT: Improved Reasoning, OCR, and World Knowledge}, arXiv, 2024.
+        \bibitem{pramanick2021harmeme} Pramanick et al., \emph{HarMeme: A Dataset for Hate Speech Detection in Memes}, EMNLP, 2021.
+        \bibitem{fersini2022mami} Fersini et al., \emph{SemEval-2022 Task 5: Multimedia Automatic Misogyny Identification}, SemEval, 2022.
+        \bibitem{gomez2020multimodal} Gomez et al., \emph{Exploring Hate Speech Detection in Multimodal Publications}, WACV Workshops, 2020.
+        \bibitem{hallinan2023detoxllm} Hallinan et al., \emph{DetoxLLM: An LLM-Based Text Detoxification System}, UBC-NLP system report, 2023.
     \end{thebibliography}
     \end{multicols}
-    \vspace{-0.8em}
+    \vspace{-1.0em}
     \end{block}
-
 \end{column}
 \separatorcolumn
-
 \end{columns}
 \end{frame}
 \end{document}
