@@ -87,7 +87,7 @@
 
     \smallgap
     This project instead proposes \textbf{text detoxification}: rewriting
-    harmful meme text in real time while preserving the core meaning and visual
+    harmful meme text while preserving the core meaning and visual
     coherence of the original meme. The goal is proactive moderation without
     erasure, enabling safer message delivery rather than simple deletion.
 
@@ -148,7 +148,7 @@
     is held out and provides all reported metrics.
     \end{block}
 
-    \begin{block}{Method}
+    \begin{block}{Training pipeline}
     \begin{center}
         \includestandalone[mode=tex,width=\linewidth]{../architecture_diagram}
     \end{center}
@@ -158,7 +158,8 @@
         \item \textbf{Stage 0:} EasyOCR extracts meme text; CLIP filters
         non-meme-like images, using stricter negative prompts for MMHS150K.
         \item \textbf{Stage 1:} LLaVA-Next runs in two sharded passes: first
-        structured hate explanations, then pseudo-detoxified rewrites.
+        structured hate explanations and different conditioning sets (\texttt{full}, \texttt{target\_only},
+    \texttt{visual\_only}, \texttt{none}) used for ablation studies, then pseudo-detoxified rewrites.
         \item \textbf{Stage 2:} noisy pseudo-labels are filtered by parse
         validity, Stage 1 quality checks, positive toxicity reduction, and text
         quality before LoRA fine-tuning BART-large.
@@ -179,9 +180,6 @@
     \textbf{Setup.} \(r=32\), \(\alpha=64\), dropout 0.05; 17M trainable
     parameters (\(\sim\)4.3\%).
 
-    \smallgap
-    \textbf{Conditions.} \texttt{full}, \texttt{target\_only},
-    \texttt{visual\_only}, \texttt{none}.
     \end{minipage}
     \hfill
     \begin{minipage}[t]{0.56\linewidth}
@@ -204,8 +202,8 @@
 
     \begin{block}{Validation}
     \textbf{Quality on 280 held-out test memes.} Text STA is the mean non-toxic
-    probability from a RoBERTa toxicity classifier; $\Delta$ toxicity is the
-    improvement over the original meme text; SIM is BERTScore F1; CLIP measures
+    probability from a RoBERTa toxicity classifier \cite{liu2019robertarobustlyoptimizedbert}; $\Delta$ toxicity is the
+    improvement over the original meme text; SIM is BERTScore F1 \cite{zhang2020bertscoreevaluatingtextgeneration}; CLIP measures
     image--text alignment.
 
     \smallgap
@@ -250,9 +248,6 @@
     \begin{minipage}[t]{0.56\linewidth}
         \vspace{0pt}
         \raggedright
-        \textbf{Teacher-guided student output.} The rewrite preserves the
-        three-line glass structure and replaces the sexual-violence claim with
-        a harmless half-full/half-empty punchline.
 
         \smallgap
         \fcolorbox{black!18}{black!3}{
@@ -275,28 +270,37 @@
             Feminist: it's half full, half empty
             \end{minipage}
         }
+
+        \smallgap
+        \textbf{Interpretation of the rewrite.} The rewrite preserves the
+        three-line glass structure and replaces the sexual-violence claim with
+        a harmless half-full/half-empty punchline.
     \end{minipage}
     \end{block}
 
     \begin{block}{Compute and emissions}
 
     \begin{center}
-        \includegraphics[width=0.86\linewidth]{figures/compute_emissions_lollipop.pdf}
+        \includegraphics[width=0.80\linewidth]{figures/compute_emissions_lollipop.pdf}
     \end{center}
 
     \smallgap
-    Stage 1 accounts for most emissions because the 7B teacher is used to create
-    pseudo-labels. This is a one-time distillation cost: the deployed BART
-    student is 76.6\(\times\) faster than the LLaVA teacher and
-    16.3\(\times\) faster than DetoxLLM in the repository benchmark.
+    Stage 1 dominates training emissions. At deployment, CLIP + Proxy + BART FT
+    full runs in 0.729 s/image: 12.9\(\times\) faster than LLaVA and
+    2.7\(\times\) faster than DetoxLLM. BART FT improves Text STA over
+    DetoxLLM; Proxy + BART trades lower STA for higher SIM, as noted in
+    Limitations.
 
-    \smallgap
+    \vspace{-0.35em}
     \begin{center}
-    \begin{tabular}{@{}c@{\hspace{2.2cm}}c@{\hspace{2.2cm}}c@{}}
-        \shortstack{\textbf{+1.88 pts}\\Text STA vs. DetoxLLM} &
-        \shortstack{\textbf{76.6\(\times\)}\\BART speedup vs. LLaVA} &
-        \shortstack{\textbf{496 g}\\total measured CO$_2$}\\
+    \begingroup
+    \setlength{\fboxsep}{0.34em}
+    \begin{tabular}{@{}c@{\hspace{0.95cm}}c@{\hspace{0.95cm}}c@{}}
+        \fcolorbox{black!12}{black!3}{\shortstack{\textbf{+1.88 pts}\\BART FT Text STA\\vs. DetoxLLM}} &
+        \fcolorbox{black!12}{black!3}{\shortstack{\textbf{12.9\(\times\) / 2.7\(\times\)}\\Proxy+BART speedup\\vs. LLaVA / DetoxLLM}} &
+        \fcolorbox{black!12}{black!3}{\shortstack{\textbf{+0.157 SIM}\\Proxy+BART\\vs. DetoxLLM}}\\
     \end{tabular}
+    \endgroup
     \end{center}
     \end{block}
 
@@ -305,13 +309,14 @@
         \item Dataset noise and heterogeneity remain substantial, especially in
         MMHS150K.
         \item The student depends on LLaVA pseudo-labels; filtering improves
-        precision but reduces the training set size.
+        precision but reduces the training set size. Having a human-curated
+        detoxification dataset would be ideal, but is beyond the scope of this project.
         \item BART has limited direct visual grounding at inference time; image
         context is distilled through text fields rather than consumed as pixels.
-        \item Evaluation is only partially multimodal. VisualBERT scores were
-        difficult to interpret as absolute detoxification metrics in this run.
+        \item Evaluation is only partially multimodal.
         \item The proxy model still shows an unbalanced toxicity--similarity
-        trade-off.
+        trade-off: it improves SIM but under-detoxifies compared with BART FT
+        and DetoxLLM.
     \end{itemize}
     \end{block}
 
@@ -320,13 +325,15 @@
     This project shows that multimodal supervision from LLaVA-Next can be
     distilled into a lightweight BART-large student that performs
     meme-specific text detoxification: it reduces toxicity while preserving
-    semantic alignment and image--text coherence.
+    semantic alignment and image--text coherence. The MLP proxy further demonstrates 
+    that a VLM-free deployment path is possible, though the toxicity--similarity 
+    trade-off is more pronounced.
 
     \smallgap
     The result supports a shift from reactive censorship to constructive
     rewriting. Future work should improve dataset quality, strengthen direct
     multimodal grounding, and integrate OCR plus inpainting modules for live
-    rewriting of harmful text in video streams and real-world physical
+    rewriting of harmful text in real-world physical
     environments.
     \end{block}
 
@@ -338,12 +345,14 @@
 \vspace{-0.2em}
 \begin{columns}[t]
 \separatorcolumn
-\begin{column}{\dimexpr2\colwidth+\sepwidth\relax}
+\begin{column}{\dimexpr2.35\colwidth+\sepwidth\relax}
     \begin{block}{References}
-    \vspace{-0.9em}
+    \vspace{-0.7em}
     \begin{multicols}{3}
-    \tiny
-    \begin{thebibliography}{9}
+    \setlength{\columnsep}{3.0cm}
+    \raggedcolumns
+    \tiny\setstretch{0.96}
+    \begin{thebibliography}{11}
         \setlength{\itemsep}{0pt}
         \setlength{\parskip}{0pt}
         \setlength{\parsep}{0pt}
@@ -351,10 +360,14 @@
         \bibitem{li2019visualbert} Li et al., \emph{VisualBERT: A Simple and Performant Baseline for Vision and Language}, arXiv:1908.03557, 2019.
         \bibitem{radford2021learning} Radford et al., \emph{Learning Transferable Visual Models From Natural Language Supervision}, ICML, 2021.
         \bibitem{logacheva2022paradetox} Logacheva et al., \emph{ParaDetox: Detoxification with Parallel Data}, ACL, 2022.
+        \columnbreak
         \bibitem{liu2024llava} Liu et al., \emph{LLaVA-NeXT: Improved Reasoning, OCR, and World Knowledge}, arXiv, 2024.
         \bibitem{pramanick2021harmeme} Pramanick et al., \emph{HarMeme: A Dataset for Hate Speech Detection in Memes}, EMNLP, 2021.
         \bibitem{fersini2022mami} Fersini et al., \emph{SemEval-2022 Task 5: Multimedia Automatic Misogyny Identification}, SemEval, 2022.
         \bibitem{gomez2020multimodal} Gomez et al., \emph{Exploring Hate Speech Detection in Multimodal Publications}, WACV Workshops, 2020.
+        \columnbreak
+        \bibitem{liu2019robertarobustlyoptimizedbert} Liu et al., \emph{RoBERTa: A Robustly Optimized BERT Pretraining Approach}, arXiv:1907.11692, 2019.
+        \bibitem{zhang2020bertscoreevaluatingtextgeneration} Zhang et al., \emph{BERTScore: Evaluating Text Generation with BERT}, arXiv:1904.09675, 2020.
         \bibitem{hallinan2023detoxllm} Hallinan et al., \emph{DetoxLLM: An LLM-Based Text Detoxification System}, UBC-NLP system report, 2023.
     \end{thebibliography}
     \end{multicols}

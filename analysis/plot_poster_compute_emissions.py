@@ -2,7 +2,7 @@
 Generate the poster-ready compute/emissions figure.
 
 The figure has two rows:
-  1. Total GPU time and emissions for the pipeline stages.
+  1. Total GPU time and emissions for the training pipeline stages.
   2. Per-image GPU time and emissions for the compared inference systems.
 
 Values are rendered as compact log-scale lollipop charts so small deployed
@@ -59,6 +59,14 @@ PIPELINE_ROWS = [
         "co2_g": 28.4,
         "co2_label": "28.4 g",
     },
+    {
+        "label": "Stage 3",
+        "kind": "proxy_network",
+        "gpu_h": 0.85,
+        "gpu_label": "0.85 h",
+        "co2_g": 7.0,
+        "co2_label": "7.0 g",
+    },
 ]
 
 COLORS = {
@@ -67,6 +75,7 @@ COLORS = {
     "student": "#0072B2",
     "baseline": "#E69F00",
     "proxy": "#56B4E9",
+    "proxy_network": "#CC79A7",
 }
 
 # Per-image benchmark values. LLaVA and DetoxLLM come from the
@@ -170,7 +179,7 @@ def main() -> None:
         PIPELINE_ROWS,
         "gpu_h",
         "gpu_label",
-        "(a) Pipeline GPU time",
+        "(a) Training pipeline GPU time",
         "hours",
         0,
         19,
@@ -180,7 +189,7 @@ def main() -> None:
         PIPELINE_ROWS,
         "co2_g",
         "co2_label",
-        "(b) Pipeline emissions",
+        "(b) Training pipeline emissions",
         "g CO$_2$",
         0,
         280,
@@ -191,7 +200,7 @@ def main() -> None:
         INFERENCE_ROWS,
         "seconds",
         "time_label",
-        "(c) Single-image GPU time",
+        "(c) Single-image inference GPU time",
         "seconds",
         0,
         13,
@@ -201,7 +210,7 @@ def main() -> None:
         INFERENCE_ROWS,
         "co2_mg",
         "co2_label",
-        "(d) Single-image emissions",
+        "(d) Single-image inference emissions",
         "mg CO$_2$",
         0,
         43,
@@ -211,18 +220,12 @@ def main() -> None:
     handles = [
         plt.Line2D([0], [0], color=COLORS["teacher"], lw=3, marker="o", markersize=5, label="LLaVA teacher"),
         plt.Line2D([0], [0], color=COLORS["student"], lw=3, marker="o", markersize=5, label="BART student"),
-        plt.Line2D([0], [0], color=COLORS["proxy"], lw=3, marker="o", markersize=5, label="CLIP Proxy+BART FT full"),
+        plt.Line2D([0], [0], color=COLORS["proxy_network"], lw=3, marker="o", markersize=5, label="Proxy network"),
+        plt.Line2D([0], [0], color=COLORS["proxy"], lw=3, marker="o", markersize=5, label="CLIP+Proxy+BART FT full"),
         plt.Line2D([0], [0], color=COLORS["baseline"], lw=3, marker="o", markersize=5, label="DetoxLLM"),
         plt.Line2D([0], [0], color=COLORS["preprocess"], lw=3, marker="o", markersize=5, label="Preprocessing"),
     ]
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.54, 1.025), ncol=5, frameon=False)
-    fig.text(
-        0.02,
-        0.006,
-        "Proxy+BART per-image cost is derived from the 280-example proxy run; other per-image values use the single-inference benchmark.",
-        fontsize=8.0,
-        color="#3B3B3B",
-    )
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.54, 1.025), ncol=6, frameon=False)
     plt.tight_layout(rect=(0, 0.055, 1, 0.93), w_pad=1.8, h_pad=1.35)
 
     for suffix in ("pdf", "png", "svg"):
