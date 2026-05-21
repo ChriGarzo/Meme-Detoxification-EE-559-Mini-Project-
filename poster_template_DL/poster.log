@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999995 (MiKTeX 24.1) (preloaded format=xelatex 2026.5.21)  21 MAY 2026 13:45
+This is XeTeX, Version 3.141592653-2.6-0.999995 (MiKTeX 24.1) (preloaded format=xelatex 2026.5.21)  21 MAY 2026 14:42
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1660,12 +1660,8 @@ File: logos/epfl.png Graphic file (type bmp)
 (../architecture_diagram.tex)
 File: ../architecture_diagram.tex Graphic file (type tex)
 LaTeX Font Info:    Calculating math sizes for size <25.63> on input line 366.
- (../lora_adapter_diagram.tex
-LaTeX Font Info:    Calculating math sizes for size <14.83> on input line 48.
-LaTeX Font Info:    External font `cmex7' loaded for size
-(Font)              <7.415> on input line 48.
-)
-File: ../lora_adapter_diagram.tex Graphic file (type tex)
+File: ../lora.png Graphic file (type bmp)
+<../lora.png>
 File: ../inference.png Graphic file (type bmp)
 <../inference.png>
 File: figures/phase2_validation_loss_detox_quality_publication.pdf Graphic file
@@ -1700,12 +1696,12 @@ Package rerunfilecheck Info: File `poster.out' has not changed.
 (rerunfilecheck)             Checksum: D41D8CD98F00B204E9800998ECF8427E;0.
  ) 
 Here is how much of TeX's memory you used:
- 32143 strings out of 409617
- 662462 string characters out of 5773201
- 2045191 words of memory out of 5000000
- 53518 multiletter control sequences out of 15000+600000
- 655323 words of font info for 192 fonts, out of 8000000 for 9000
+ 32008 strings out of 409617
+ 660025 string characters out of 5773201
+ 2035191 words of memory out of 5000000
+ 53390 multiletter control sequences out of 15000+600000
+ 631522 words of font info for 163 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 128i,20n,123p,541b,1743s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 128i,18n,123p,541b,1714s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
 Output written on poster.pdf (1 page).
