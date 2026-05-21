@@ -14,12 +14,27 @@
 % Fonts
 % ====================
 
-\newfontfamily\Raleway[Ligatures=TeX]{Raleway}
-\newfontfamily\Lato[Ligatures=TeX]{Lato}
+\newfontfamily\Raleway[
+  Ligatures=TeX,
+  Extension=.otf,
+  UprightFont=Raleway-Regular,
+  ItalicFont=Raleway-RegularItalic,
+  BoldFont=Raleway-Bold,
+  BoldItalicFont=Raleway-BoldItalic
+]{Raleway}
+\newfontfamily\Lato[
+  Ligatures=TeX,
+  Extension=.ttf,
+  UprightFont=Lato-Light,
+  ItalicFont=Lato-LightItalic,
+  BoldFont=Lato-Regular,
+  BoldItalicFont=Lato-Italic
+]{Lato}
 
 \usefonttheme{professionalfonts}
 
 \setsansfont{Lato}[
+  Extension=.ttf,
   UprightFont=*-Light,
   ItalicFont=*-LightItalic,
   BoldFont=*-Regular,

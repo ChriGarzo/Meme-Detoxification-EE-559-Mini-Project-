@@ -4,194 +4,262 @@
 \usepackage[utf8]{inputenc}
 \usepackage{amsfonts}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, calc, fit, positioning}
+\usetikzlibrary{arrows.meta, backgrounds, calc, fit, positioning, shapes.geometric}
 
 \begin{document}
 
 \begin{tikzpicture}[
     every node/.style={font=\sffamily},
-    arrow/.style={-{Latex[length=2.8mm,width=2.0mm]}, line width=0.75pt, draw=black!72},
-    trainarrow/.style={-{Latex[length=2.5mm,width=1.8mm]}, line width=0.65pt, draw=black!55, dashed},
+    arrow/.style={-{Latex[length=2.9mm,width=2.0mm]}, line width=0.82pt, draw=black!72},
+    softarrow/.style={-{Latex[length=3.3mm,width=2.35mm]}, line width=1.05pt, draw=purple!76!black},
+    thinconn/.style={line width=0.55pt, draw=black!58},
+    systembox/.style={
+        rounded corners=9pt,
+        draw=black!44,
+        dashed,
+        line width=0.85pt,
+        inner sep=9pt
+    },
+    title/.style={font=\sffamily\bfseries\small, text=black!82},
+    label/.style={font=\sffamily\tiny, align=center, text=black!68},
     input/.style={
         rectangle,
         rounded corners=5pt,
-        draw=black!55,
+        draw=black!58,
         fill=black!5,
         line width=0.75pt,
         align=center,
-        text width=2.55cm,
-        minimum height=0.86cm,
+        text width=2.15cm,
+        minimum height=0.74cm,
         inner sep=4pt,
         font=\sffamily\scriptsize
     },
-    clip/.style={
-        rectangle,
-        rounded corners=5pt,
+    clipencoder/.style={
+        trapezium,
+        trapezium left angle=75,
+        trapezium right angle=105,
+        shape border rotate=180,
         draw=teal!65!black,
         fill=teal!8,
         line width=0.85pt,
         align=center,
-        text width=2.45cm,
-        minimum height=0.92cm,
-        inner sep=4pt,
+        text width=2.00cm,
+        minimum height=0.95cm,
+        inner sep=3pt,
         font=\sffamily\scriptsize
     },
-    embed/.style={
+    feature/.style={
         rectangle,
         rounded corners=5pt,
-        draw=cyan!65!black,
+        draw=cyan!68!black,
         fill=cyan!8,
         line width=0.85pt,
         align=center,
-        text width=2.50cm,
-        minimum height=1.03cm,
+        text width=3.35cm,
+        minimum height=0.72cm,
         inner sep=4pt,
         font=\sffamily\scriptsize
     },
-    mlp/.style={
-        rectangle,
-        rounded corners=5pt,
+    mlplayer/.style={
+        trapezium,
+        trapezium left angle=76,
+        trapezium right angle=104,
+        shape border rotate=90,
         draw=purple!70!black,
         fill=purple!8,
         line width=0.9pt,
         align=center,
-        text width=2.25cm,
-        minimum height=1.12cm,
-        inner sep=4pt,
+        text width=1.62cm,
+        minimum width=1.45cm,
+        minimum height=2.30cm,
+        inner sep=3pt,
         font=\sffamily\scriptsize
     },
-    bart/.style={
+    norm/.style={
         rectangle,
-        rounded corners=5pt,
+        rounded corners=3pt,
+        draw=purple!62!black,
+        fill=purple!4,
+        line width=0.7pt,
+        align=center,
+        text width=1.75cm,
+        minimum height=0.46cm,
+        inner sep=2pt,
+        font=\sffamily\tiny
+    },
+    token/.style={
+        rectangle,
+        rounded corners=2pt,
+        draw=blue!62!black,
+        fill=blue!8,
+        line width=0.7pt,
+        minimum width=0.42cm,
+        minimum height=0.58cm,
+        inner sep=0pt
+    },
+    softtoken/.style={
+        rectangle,
+        rounded corners=2pt,
+        draw=purple!70!black,
+        fill=purple!13,
+        line width=0.8pt,
+        minimum width=0.42cm,
+        minimum height=0.58cm,
+        inner sep=0pt
+    },
+    bartblock/.style={
+        rectangle,
+        rounded corners=6pt,
+        draw=orange!78!black,
+        fill=orange!10,
+        line width=0.9pt,
+        align=center,
+        text width=4.15cm,
+        minimum height=1.05cm,
+        inner sep=5pt,
+        font=\sffamily\scriptsize
+    },
+    encoderblock/.style={
+        rectangle,
+        rounded corners=6pt,
         draw=blue!68!black,
         fill=blue!8,
         line width=0.9pt,
         align=center,
-        text width=2.65cm,
-        minimum height=1.02cm,
-        inner sep=4pt,
+        text width=3.70cm,
+        minimum height=0.98cm,
+        inner sep=5pt,
         font=\sffamily\scriptsize
     },
-    decoder/.style={
+    output/.style={
         rectangle,
         rounded corners=5pt,
-        draw=orange!78!black,
-        fill=orange!12,
-        line width=0.9pt,
+        draw=green!52!black,
+        fill=green!8,
+        line width=0.85pt,
         align=center,
-        text width=2.45cm,
-        minimum height=1.02cm,
+        text width=2.40cm,
+        minimum height=0.78cm,
         inner sep=4pt,
         font=\sffamily\scriptsize
-    },
-    memoryproxy/.style={
-        rectangle,
-        rounded corners=4pt,
-        draw=purple!70!black,
-        fill=purple!9,
-        line width=0.85pt,
-        align=center,
-        text width=3.05cm,
-        minimum height=0.78cm,
-        inner sep=3pt,
-        font=\sffamily\scriptsize
-    },
-    memorytext/.style={
-        rectangle,
-        rounded corners=4pt,
-        draw=blue!68!black,
-        fill=blue!7,
-        line width=0.85pt,
-        align=center,
-        text width=3.05cm,
-        minimum height=0.78cm,
-        inner sep=3pt,
-        font=\sffamily\scriptsize
-    },
-    loss/.style={
-        circle,
-        draw=red!70!black,
-        fill=red!8,
-        line width=0.85pt,
-        align=center,
-        minimum size=1.12cm,
-        inner sep=1pt,
-        font=\sffamily\scriptsize
-    },
-    label/.style={font=\sffamily\tiny, align=center, text=black!68},
-    section/.style={font=\sffamily\bfseries\scriptsize, align=center, text=black!80}
+    }
 ]
 
-\path[fill=white] (-1.05,-4.95) rectangle (27.35,2.25);
+\path[fill=white] (-0.85,-5.55) rectangle (22.15,5.28);
 
 % ---------------------------------------------------------------------------
-% Inference path: CLIP -> proxy MLP -> BART encoder memory -> decoder.
+% CLIP module: two encoders, concatenation, and the 1536-dimensional feature.
 % ---------------------------------------------------------------------------
-\node[input] (image) at (0.0, 1.25) {Meme\\image};
-\node[input] (text) at (0.0,-0.15) {Original\\meme text};
+\node[input] (image) at (1.25,-4.15) {Meme\\image};
+\node[input] (text) at (4.15,-4.15) {Original\\text};
 
-\node[clip] (clipimage) at (3.05, 1.25) {CLIP image\\encoder};
-\node[clip] (cliptext) at (3.05,-0.15) {CLIP text\\encoder};
+\node[clipencoder] (imageenc) at (1.25,-2.52) {Image\\encoder};
+\node[clipencoder] (textenc) at (4.15,-2.52) {Text\\encoder};
 
-\node[embed] (features) at (5.95, 0.55) {Concatenate\\$z=[e_I;e_T]$\\$1536$ dims};
+\node[
+    circle,
+    draw=teal!68!black,
+    fill=white,
+    line width=0.85pt,
+    minimum size=0.62cm,
+    font=\sffamily\scriptsize
+] (concat) at (2.70,-1.42) {$\oplus$};
+\node[label, above=0.03cm of concat] {concat};
 
-\node[mlp] (mlp1) at (8.95, 0.55) {Linear\\$1536 \rightarrow 1024$\\LayerNorm + GELU};
-\node[mlp] (mlp2) at (11.55, 0.55) {Linear\\$1024 \rightarrow 1024$\\LayerNorm + GELU};
-\node[mlp] (mlp3) at (14.15, 0.55) {Linear + reshape\\$1024 \rightarrow K{\times}d$};
-\node[embed] (softtokens) at (16.95, 0.55) {Proxy soft\\encoder tokens\\$h_p \in \mathbb{R}^{K\times d}$};
+\node[feature] (features) at (2.70,-0.36) {CLIP image + text embeddings\\$z=[e_I;e_T]\in\mathbb{R}^{1536}$};
 
-\node[input] (noneprompt) at (13.40,-1.75) {Null-context\\text prompt\\$[T,V,M]=\mathrm{null}$};
-\node[bart] (textencoder) at (16.35,-1.75) {BART encoder\\on original text};
+\draw[arrow] (image) -- (imageenc);
+\draw[arrow] (text) -- (textenc);
+\draw[arrow] (imageenc.north) -- ++(0,0.48) -| (concat.south west);
+\draw[arrow] (textenc.north) -- ++(0,0.48) -| (concat.south east);
+\draw[arrow] (concat) -- (features);
 
-\node[memoryproxy] (proxymem) at (19.80, 0.92) {prepended proxy memory\\$h_p$};
-\node[memorytext] (textmem) at (19.80, 0.05) {text encoder states\\$h_{\mathrm{text}}$};
+\begin{scope}[on background layer]
+    \node[systembox, fit=(image)(text)(imageenc)(textenc)(concat)(features)] (clipbox) {};
+\end{scope}
+\node[title] at ($(clipbox.north)+(0,-0.22)$) {CLIP};
+
+% ---------------------------------------------------------------------------
+% Proxy MLP: drawn as internal architecture instead of a single box.
+% ---------------------------------------------------------------------------
+\node[mlplayer] (lin1) at (7.15,2.10) {\textbf{Linear}\\[1pt]$1536\!\rightarrow\!1024$};
+\node[norm, below=0.12cm of lin1] (ln1) {LayerNorm\\GELU};
+
+\node[mlplayer] (lin2) at (9.65,2.10) {\textbf{Linear}\\[1pt]$1024\!\rightarrow\!1024$};
+\node[norm, below=0.12cm of lin2] (ln2) {LayerNorm\\GELU};
+
+\node[mlplayer] (lin3) at (12.15,2.10) {\textbf{Linear}\\+ reshape\\[1pt]$1024\!\rightarrow\!K d$};
+\node[feature, text width=2.52cm, minimum height=0.70cm] (proxyout) at (14.78,2.10)
+    {proxy soft tokens\\$h_p\in\mathbb{R}^{K\times d}$};
+
+\draw[arrow] (features.north) -- ++(0,1.05) -| (lin1.south);
+\draw[arrow] (lin1.east) -- (lin2.west);
+\draw[arrow] (lin2.east) -- (lin3.west);
+\draw[arrow] (lin3.east) -- (proxyout.west);
+
+\begin{scope}[on background layer]
+    \node[systembox, fit=(lin1)(ln1)(lin2)(ln2)(lin3)(proxyout)] (mlpbox) {};
+\end{scope}
+\node[title] at ($(mlpbox.north)+(0,-0.22)$) {MLP proxy};
+
+% ---------------------------------------------------------------------------
+% BART module: token memory and explicit injection point.
+% ---------------------------------------------------------------------------
+\node[input, text width=3.25cm] (nullprompt) at (15.40,-3.90)
+    {Null-context prompt\\$[T,V,M]=\mathrm{null}$ + text};
+
+\foreach \x/\name in {17.30/tok1,17.80/tok2,18.30/tok3,18.80/tok4} {
+    \node[token] (\name) at (\x,-2.88) {};
+}
+\node[label, below=0.10cm of tok2] {text tokens};
+
+\node[encoderblock] (encoder) at (18.05,-1.78) {BART text encoder\\produces $h_{\mathrm{text}}$};
+
+\foreach \x/\name in {18.10/mem1,18.60/mem2,19.10/mem3,19.60/mem4} {
+    \node[token] (\name) at (\x,-0.66) {};
+}
+\node[label, below=0.08cm of mem2] {encoder states};
+
+\foreach \x/\name in {16.95/soft1,17.45/soft2} {
+    \node[softtoken] (\name) at (\x,-0.66) {};
+}
+\node[label, above=0.08cm of soft1] {MLP soft\\prefix};
+
 \node[
     rectangle,
-    rounded corners=6pt,
-    draw=black!48,
+    rounded corners=5pt,
+    draw=black!50,
+    fill=white,
     line width=0.75pt,
-    inner sep=5pt,
-    fit=(proxymem)(textmem),
-    label={[label]above:BART encoder memory}
-] (memorybox) {};
+    inner sep=4pt,
+    fit=(soft1)(soft2)(mem1)(mem2)(mem3)(mem4),
+    label={[label]above:BART encoder memory used by decoder}
+] (memory) {};
 
-\node[decoder] (decoder) at (23.15, 0.48) {BART decoder\\cross-attention};
-\node[input] (rewrite) at (26.00, 0.48) {Detoxified\\rewrite};
+\node[bartblock] (decoder) at (18.05,0.82) {BART decoder\\cross-attends to\\proxy + text memory};
+\node[output] (rewrite) at (18.05,2.62) {Detoxified\\rewrite};
 
-\draw[arrow] (image) -- (clipimage);
-\draw[arrow] (text) -- (cliptext);
-\draw[arrow] (clipimage.east) -- ++(0.45,0) |- (features.west);
-\draw[arrow] (cliptext.east) -- ++(0.45,0) |- (features.west);
-\draw[arrow] (features) -- (mlp1);
-\draw[arrow] (mlp1) -- (mlp2);
-\draw[arrow] (mlp2) -- (mlp3);
-\draw[arrow] (mlp3) -- (softtokens);
-\draw[arrow] (softtokens.east) -- node[above,label] {injection as\\soft prefix} (proxymem.west);
-
-\draw[arrow] (noneprompt) -- (textencoder);
-\draw[arrow] (textencoder.east) -- ++(0.75,0) |- (textmem.west);
-\draw[arrow] (memorybox.east) -- (decoder.west);
+\draw[arrow] (nullprompt) -- ++(0,0.46) -| (tok2.south);
+\draw[arrow] (tok2.north) -- (encoder.south);
+\draw[arrow] (encoder.north) -- (mem2.south);
+\draw[arrow] (memory.north) -- (decoder.south);
 \draw[arrow] (decoder) -- (rewrite);
 
-\node[section] at (11.55, 1.74) {Proxy MLP};
-\node[section] at (19.80, 1.78) {Insertion point};
+\draw[softarrow]
+    (proxyout.east)
+    .. controls (21.10,2.10) and (21.05,-0.58) ..
+    node[pos=0.58,right,label,text=purple!76!black] {injected as\\soft encoder\\memory}
+    (soft2.east);
 
-% ---------------------------------------------------------------------------
-% Training-only target path used to supervise the proxy.
-% ---------------------------------------------------------------------------
-\node[input] (fullprompt) at (5.95,-3.45) {Full prompt\\$[T,V,M]$ from\\LLaVA fields};
-\node[bart] (fullencoder) at (9.25,-3.45) {Frozen full\\BART encoder};
-\node[embed] (pool) at (12.25,-3.45) {Adaptive pool\\to $K$ tokens\\$h_{\mathrm{full}}$};
-\node[loss] (mseloss) at (15.15,-3.45) {MSE\\loss};
+\begin{scope}[on background layer]
+    \node[systembox, fit=(nullprompt)(tok1)(tok4)(encoder)(memory)(decoder)(rewrite)] (bartbox) {};
+\end{scope}
+\node[title] at ($(bartbox.south east)+(-0.62,0.32)$) {BART};
 
-\draw[trainarrow] (fullprompt) -- (fullencoder);
-\draw[trainarrow] (fullencoder) -- (pool);
-\draw[trainarrow] (pool) -- node[above,label] {target} (mseloss);
-\draw[trainarrow] (softtokens.south) -- ++(0,-1.05) -| node[pos=0.25,right,label] {prediction} (mseloss.north);
-
-\node[label, text width=9.0cm] at (10.55,-4.55) {
-Training only: CLIP and BART are frozen. The MLP learns to match pooled
-full-condition BART encoder hidden states using image/text CLIP features.
+\node[label, text width=8.35cm] at (15.95,-4.92) {
+Inference path: CLIP extracts image/text features, the MLP predicts $K$ BART-sized
+soft memory tokens, and these tokens are prepended to the text encoder states
+before BART decoding.
 };
 
 \end{tikzpicture}

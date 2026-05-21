@@ -1,4 +1,4 @@
-\documentclass[tikz,border=5pt]{standalone}
+\documentclass[tikz,border=4pt]{standalone}
 
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -8,64 +8,37 @@
 \begin{document}
 
 \begin{tikzpicture}[
-    node distance=0.82cm and 0.72cm,
+    node distance=0.10cm,
     every node/.style={font=\sffamily},
     box/.style={
         rectangle,
-        rounded corners=7pt,
+        rounded corners=4pt,
         draw=#1,
-        fill=#1!11,
+        fill=#1!12,
         very thick,
         align=center,
-        text width=4.15cm,
-        minimum height=1.65cm,
-        inner sep=4pt,
-        font=\sffamily\scriptsize
+        text width=4.10cm,
+        minimum height=0.70cm,
+        inner sep=2pt,
+        font=\sffamily\bfseries\tiny
     },
     arrow/.style={
-        -{Latex[length=2.2mm, width=1.6mm]},
-        very thick,
+        -{Latex[length=1.7mm, width=1.2mm]},
+        thick,
         color=black!75
-    },
+    }
 ]
 
-\node[box=blue] (stage0) {
-    \textbf{Stage 0}\\
-    \textbf{Data prep}\\
-    OCR + CLIP filter
-};
+\node[box=blue] (A) {Stage 0\\\mbox{Data preparation}};
+\node[box=green!60!black, right=of A] (B) {Stage 1\\\mbox{LLaVA-Next teacher}};
+\node[box=cyan!70!black, right=of B] (C) {Stage 2\\\mbox{BART-large student}};
+\node[box=purple, right=of C] (D) {Stage 3\\\mbox{Proxy network}};
+\node[box=red, right=of D] (E) {Evaluation};
 
-\node[box=green!60!black, right=of stage0] (stage1) {
-    \textbf{Stage 1}\\
-    \textbf{LLaVA teacher}\\
-    Harm analysis\\
-    + safer rewrites
-};
-
-\node[box=cyan!70!black, below=of stage1] (stage2) {
-    \textbf{Stage 2}\\
-    \textbf{BART student}\\
-    LoRA tuning\\
-    safe meme text
-};
-
-\node[box=purple, left=of stage2] (stage3) {
-    \textbf{Stage 3}\\
-    \textbf{Proxy net}\\
-    CLIP features to\\
-    BART memory
-};
-
-\node[box=red, below=of stage3] (eval) {
-    \textbf{Evaluation}\\
-    Text STA, $\Delta$ tox.,\\
-    SIM, CLIP, CO$_2$
-};
-
-\draw[arrow] (stage0) -- (stage1);
-\draw[arrow] (stage1) -- (stage2);
-\draw[arrow] (stage2) -- (stage3);
-\draw[arrow] (stage3) -- (eval);
+\draw[arrow] (A) -- (B);
+\draw[arrow] (B) -- (C);
+\draw[arrow] (C) -- (D);
+\draw[arrow] (D) -- (E);
 
 \end{tikzpicture}
 

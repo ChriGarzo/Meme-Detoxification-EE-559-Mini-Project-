@@ -3,7 +3,7 @@
 main: poster.pdf
 
 poster.pdf: FORCE
-	latexmk -pdflatex='lualatex -interaction nonstopmode' -pdf poster.tex
+	latexmk -xelatex -interaction=nonstopmode poster.tex
 
 clean:
-	latexmk -pdf -C
+	latexmk -xelatex -C

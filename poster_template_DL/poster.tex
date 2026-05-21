@@ -146,7 +146,7 @@
 
     \begin{block}{Method}
     \begin{center}
-        \includestandalone[mode=tex,width=0.58\linewidth]{../architecture_diagram}
+        \includestandalone[mode=tex,width=\linewidth]{../architecture_diagram}
     \end{center}
 
     \vspace{0.35em}
@@ -234,21 +234,24 @@
     \begin{minipage}[t]{0.40\linewidth}
         \vspace{0pt}
         \centering
-        \includegraphics[width=0.90\linewidth]{figures/validation_example_9106.jpg}
+        \includegraphics[width=0.90\linewidth]{figures/11525.jpg}
     \end{minipage}
     \hfill
     \begin{minipage}[t]{0.56\linewidth}
         \vspace{0pt}
         \raggedright
-        \textbf{Teacher-guided student output.} The rewrite keeps the meme's
-        nostalgic structure while removing the explicit ownership claim and
-        preserving a grammatically natural sentence.
+        \textbf{Teacher-guided student output.} The rewrite preserves the
+        three-line glass structure and replaces the sexual-violence claim with
+        a harmless half-full/half-empty punchline.
 
         \smallgap
         \fcolorbox{black!18}{black!3}{
             \begin{minipage}[t][\qualboxheight][t]{0.94\linewidth}
             \textbf{Detected harmful framing}\\
-            \small ``Back in my day, men were men and women were property.''
+            \scriptsize
+            Optimist: it's half full\\[-0.08em]
+            Pessimist: it's half empty\\[-0.08em]
+            Feminist: it raped me
             \end{minipage}
         }
 
@@ -256,7 +259,10 @@
         \fcolorbox{green!45!black}{green!6}{
             \begin{minipage}[t][\qualboxheight][t]{0.94\linewidth}
             \textbf{Detoxified rewrite}\\
-            \small ``Back in my day, men were men and women were women.''
+            \scriptsize
+            Optimist: it's half full\\[-0.08em]
+            Pessimist: it's half empty\\[-0.08em]
+            Feminist: it's half full, half empty
             \end{minipage}
         }
     \end{minipage}
