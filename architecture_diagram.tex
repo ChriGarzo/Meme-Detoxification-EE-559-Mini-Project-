@@ -7,6 +7,12 @@
 
 \begin{document}
 
+\definecolor{colPreprocess}{HTML}{6B7280}
+\definecolor{colTeacher}{HTML}{D55E00}
+\definecolor{colStudent}{HTML}{0072B2}
+\definecolor{colProxy}{HTML}{56B4E9}
+\definecolor{colEval}{HTML}{C0392B}
+
 \begin{tikzpicture}[
     node distance=0.45cm,
     every node/.style={font=\sffamily},
@@ -29,11 +35,11 @@
     }
 ]
 
-\node[box=blue] (A) {Stage 0\\\mbox{Data preparation}};
-\node[box=green!60!black, right=of A] (B) {Stage 1\\\mbox{LLaVA-Next teacher}};
-\node[box=cyan!70!black, right=of B] (C) {Stage 2\\\mbox{BART-large student}};
-\node[box=purple, right=of C] (D) {Stage 3\\\mbox{Proxy network}};
-\node[box=red, right=of D] (E) {Evaluation};
+\node[box=colPreprocess] (A) {Stage 0\\\mbox{Data preparation}};
+\node[box=colTeacher, right=of A] (B) {Stage 1\\\mbox{LLaVA-Next teacher}};
+\node[box=colStudent, right=of B] (C) {Stage 2\\\mbox{BART-large student}};
+\node[box=colProxy, right=of C] (D) {Stage 3\\\mbox{Proxy network}};
+\node[box=colEval, right=of D] (E) {Evaluation};
 
 \draw[arrow] (A) -- (B);
 \draw[arrow] (B) -- (C);

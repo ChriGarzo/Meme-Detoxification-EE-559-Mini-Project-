@@ -65,8 +65,8 @@ COLORS = {
     "preprocess": "#6B7280",
     "teacher": "#D55E00",
     "student": "#0072B2",
-    "baseline": "#CC79A7",
-    "proxy": "#009E73",
+    "baseline": "#E69F00",
+    "proxy": "#56B4E9",
 }
 
 # Per-image benchmark values. LLaVA and DetoxLLM come from the
