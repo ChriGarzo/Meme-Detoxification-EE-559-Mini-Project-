@@ -65,8 +65,8 @@ COLORS = {
     "preprocess": "#6B7280",
     "teacher": "#D55E00",
     "student": "#0072B2",
-    "baseline": "#CC79A7",
-    "proxy": "#009E73",
+    "baseline": "#E69F00",
+    "proxy": "#56B4E9",
 }
 
 # Per-image benchmark values. LLaVA and DetoxLLM come from the
@@ -79,6 +79,7 @@ INFERENCE_ROWS = [
         "seconds": 9.376,
         "time_label": "9.38 s",
         "co2_ug": 34340,
+        "co2_mg": 34.34,
         "co2_label": "34.3 mg",
     },
     {
@@ -87,6 +88,7 @@ INFERENCE_ROWS = [
         "seconds": 1.989,
         "time_label": "1.99 s",
         "co2_ug": 5646,
+        "co2_mg": 5.646,
         "co2_label": "5.65 mg",
     },
     {
@@ -95,6 +97,7 @@ INFERENCE_ROWS = [
         "seconds": 3.4 * 60 / 280,
         "time_label": "0.729 s",
         "co2_ug": 0.5 * 1e6 / 280,
+        "co2_mg": 0.5 * 1000 / 280,
         "co2_label": "1.79 mg",
     },
 ]
@@ -131,7 +134,7 @@ def plot_panel(ax, rows, key, labels_key, title, xlabel, xmin, xmax, *, show_yla
         ax.hlines(yi, xmin, value, color=color, linewidth=2.4, alpha=0.82)
         ax.scatter(value, yi, s=42, color=color, edgecolor="white", linewidth=0.8, zorder=3)
         ax.text(
-            value * 1.12,
+            value + (xmax - xmin) * 0.03,
             yi,
             row[labels_key],
             ha="left",
@@ -140,12 +143,12 @@ def plot_panel(ax, rows, key, labels_key, title, xlabel, xmin, xmax, *, show_yla
             color="#2F2F2F",
         )
 
-    ax.set_xscale("log")
     ax.set_xlim(xmin, xmax)
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_yticks(y)
     ax.set_yticklabels([row["label"] for row in rows] if show_ylabels else [])
+    ax.set_ylim(bottom=-0.7)
     ax.grid(axis="x", color="#D6D6D6", linewidth=0.55, alpha=0.7)
     ax.grid(axis="y", visible=False)
     ax.tick_params(axis="both", length=3, color="#555555")
@@ -168,9 +171,9 @@ def main() -> None:
         "gpu_h",
         "gpu_label",
         "(a) Pipeline GPU time",
-        "hours, log scale",
-        0.035,
-        30,
+        "hours",
+        0,
+        19,
     )
     plot_panel(
         axes[0, 1],
@@ -178,9 +181,9 @@ def main() -> None:
         "co2_g",
         "co2_label",
         "(b) Pipeline emissions",
-        "g CO$_2$, log scale",
-        0.28,
-        420,
+        "g CO$_2$",
+        0,
+        280,
         show_ylabels=False,
     )
     plot_panel(
@@ -189,19 +192,19 @@ def main() -> None:
         "seconds",
         "time_label",
         "(c) Single-image GPU time",
-        "seconds, log scale",
-        0.07,
-        14,
+        "seconds",
+        0,
+        13,
     )
     plot_panel(
         axes[1, 1],
         INFERENCE_ROWS,
-        "co2_ug",
+        "co2_mg",
         "co2_label",
         "(d) Single-image emissions",
-        "$\\mu$g CO$_2$, log scale",
-        180,
-        70000,
+        "mg CO$_2$",
+        0,
+        43,
         show_ylabels=False,
     )
 
