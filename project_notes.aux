@@ -1,0 +1,116 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Executive Summary}{3}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}What The Project Is About}{3}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Problem}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Research Hypothesis}{3}{subsection.2.2}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {1}{93.5309pt}\LT@entry 
+    {1}{229.42265pt}\LT@entry 
+    {1}{120.71478pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}High-Level Pipeline}{4}{subsection.2.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Project training pipeline, as used in the poster.}}{4}{figure.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Datasets And Data Construction}{4}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Source Datasets}{4}{subsection.3.1}\protected@file@percent }
+\gdef \LT@ii {\LT@entry 
+    {1}{93.5309pt}\LT@entry 
+    {1}{125.24197pt}\LT@entry 
+    {1}{224.89546pt}}
+\gdef \LT@iii {\LT@entry 
+    {1}{199.18546pt}\LT@entry 
+    {1}{45.93027pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Stage 0: OCR + CLIP Filtering}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Unified Splits}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Stage 2 Dataset Statistics}{5}{subsection.3.4}\protected@file@percent }
+\gdef \LT@iv {\LT@entry 
+    {1}{111.65349pt}\LT@entry 
+    {1}{320.01485pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Main Model Components}{6}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}LLaVA-Next Teacher}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}BART Student}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Conditioning Settings}{6}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Important implementation caveat.}{7}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}LoRA Adaptation}{7}{subsection.4.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces LoRA idea used for parameter-efficient adaptation.}}{7}{figure.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}CLIP Proxy}{8}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Stage 1: Pseudo-Label Generation In Detail}{8}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Input Selection}{8}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Explanation Pass}{8}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Rewrite Pass}{8}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Quality Filtering}{9}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Stage 2 Dataset Builder In Detail}{9}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Filtering Rules}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Record Format}{9}{subsection.6.2}\protected@file@percent }
+\gdef \LT@v {\LT@entry 
+    {1}{166.00742pt}\LT@entry 
+    {1}{265.6609pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Stage 2 BART Training In Detail}{10}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Current Training Setup}{10}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Training Data Flow}{10}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Generation Configuration}{10}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Metrics During Training}{11}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Checkpoint Export}{11}{subsection.7.5}\protected@file@percent }
+\gdef \LT@vi {\LT@entry 
+    {1}{36.66049pt}\LT@entry 
+    {1}{92.31705pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Training Behavior}{12}{subsection.7.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Validation-loss and detox-quality plot included with the repository.}}{12}{figure.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Proxy Training In Detail}{12}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Training Targets}{12}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Why This Is Interesting}{13}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Inference Pipeline In Detail}{13}{section.9}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Inference diagram included with the repository.}}{13}{figure.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Standard BART Inference}{13}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Proxy + BART Inference}{13}{subsection.9.2}\protected@file@percent }
+\gdef \LT@vii {\LT@entry 
+    {1}{141.89174pt}\LT@entry 
+    {1}{21.00002pt}\LT@entry 
+    {1}{54.81218pt}\LT@entry 
+    {1}{33.77777pt}\LT@entry 
+    {1}{33.77777pt}\LT@entry 
+    {1}{33.77777pt}\LT@entry 
+    {1}{48.42981pt}\LT@entry 
+    {1}{48.8325pt}\LT@entry 
+    {1}{49.97182pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Evaluation Pipeline}{14}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Results}{14}{section.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Main Test Results}{14}{subsection.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}How To Read The Metrics}{14}{subsection.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Main Findings}{15}{subsection.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{LLaVA teacher is the upper-bound reference.}{15}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Fine-tuned BART beats DetoxLLM on text detoxification.}{15}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{DetoxLLM has higher SIM than fine-tuned BART.}{15}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Base BART is not a real baseline for quality.}{15}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Proxy + BART optimizes fidelity more than detoxification.}{15}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{VisualBERT is not reliable as an absolute pass/fail score here.}{15}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.4}Qualitative Example}{15}{subsection.10.4}\protected@file@percent }
+\gdef \LT@viii {\LT@entry 
+    {1}{238.48395pt}\LT@entry 
+    {1}{71.68181pt}\LT@entry 
+    {1}{70.53412pt}\LT@entry 
+    {1}{77.35376pt}}
+\gdef \LT@ix {\LT@entry 
+    {1}{92.48228pt}\LT@entry 
+    {1}{53.14627pt}\LT@entry 
+    {1}{67.84477pt}\LT@entry 
+    {1}{64.88008pt}\LT@entry 
+    {1}{59.44073pt}\LT@entry 
+    {1}{60.48972pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {11}Compute, Emissions, And Efficiency}{16}{section.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Pipeline Carbon Summary}{16}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Single-Inference Benchmark}{16}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Limitations And Caveats}{16}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}What You Need To Know For Questions}{17}{section.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.1}Why Not Just Use LLaVA?}{17}{subsection.13.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.2}Why Use Explanations?}{17}{subsection.13.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.3}Why Use LoRA?}{17}{subsection.13.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.4}Why Does Base BART Have High STA?}{17}{subsection.13.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {13.5}Why Is Proxy SIM So High But STA Lower?}{17}{subsection.13.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {14}Three-Minute Presentation Script}{17}{section.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {15}Code Map}{18}{section.15}\protected@file@percent }
+\gdef \LT@x {\LT@entry 
+    {1}{156.95303pt}\LT@entry 
+    {1}{274.7222pt}}
+\gdef \@abspage@last{19}

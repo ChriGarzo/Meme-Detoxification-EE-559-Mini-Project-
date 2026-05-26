@@ -1,0 +1,62 @@
+\contentsline {section}{\numberline {1}Executive Summary}{3}{section.1}%
+\contentsline {section}{\numberline {2}What The Project Is About}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Problem}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Research Hypothesis}{3}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}High-Level Pipeline}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Datasets And Data Construction}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Source Datasets}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Stage 0: OCR + CLIP Filtering}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Unified Splits}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Stage 2 Dataset Statistics}{5}{subsection.3.4}%
+\contentsline {section}{\numberline {4}Main Model Components}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}LLaVA-Next Teacher}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}BART Student}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Conditioning Settings}{6}{subsection.4.3}%
+\contentsline {paragraph}{Important implementation caveat.}{7}{section*.2}%
+\contentsline {subsection}{\numberline {4.4}LoRA Adaptation}{7}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}CLIP Proxy}{8}{subsection.4.5}%
+\contentsline {section}{\numberline {5}Stage 1: Pseudo-Label Generation In Detail}{8}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Input Selection}{8}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Explanation Pass}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Rewrite Pass}{8}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Quality Filtering}{9}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Stage 2 Dataset Builder In Detail}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Filtering Rules}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Record Format}{9}{subsection.6.2}%
+\contentsline {section}{\numberline {7}Stage 2 BART Training In Detail}{10}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Current Training Setup}{10}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Training Data Flow}{10}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Generation Configuration}{10}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Metrics During Training}{11}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}Checkpoint Export}{11}{subsection.7.5}%
+\contentsline {subsection}{\numberline {7.6}Training Behavior}{12}{subsection.7.6}%
+\contentsline {section}{\numberline {8}Proxy Training In Detail}{12}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Training Targets}{12}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Why This Is Interesting}{13}{subsection.8.2}%
+\contentsline {section}{\numberline {9}Inference Pipeline In Detail}{13}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Standard BART Inference}{13}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Proxy + BART Inference}{13}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Evaluation Pipeline}{14}{subsection.9.3}%
+\contentsline {section}{\numberline {10}Results}{14}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Main Test Results}{14}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}How To Read The Metrics}{14}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Main Findings}{15}{subsection.10.3}%
+\contentsline {paragraph}{LLaVA teacher is the upper-bound reference.}{15}{section*.3}%
+\contentsline {paragraph}{Fine-tuned BART beats DetoxLLM on text detoxification.}{15}{section*.4}%
+\contentsline {paragraph}{DetoxLLM has higher SIM than fine-tuned BART.}{15}{section*.5}%
+\contentsline {paragraph}{Base BART is not a real baseline for quality.}{15}{section*.6}%
+\contentsline {paragraph}{Proxy + BART optimizes fidelity more than detoxification.}{15}{section*.7}%
+\contentsline {paragraph}{VisualBERT is not reliable as an absolute pass/fail score here.}{15}{section*.8}%
+\contentsline {subsection}{\numberline {10.4}Qualitative Example}{15}{subsection.10.4}%
+\contentsline {section}{\numberline {11}Compute, Emissions, And Efficiency}{16}{section.11}%
+\contentsline {subsection}{\numberline {11.1}Pipeline Carbon Summary}{16}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}Single-Inference Benchmark}{16}{subsection.11.2}%
+\contentsline {section}{\numberline {12}Limitations And Caveats}{16}{section.12}%
+\contentsline {section}{\numberline {13}What You Need To Know For Questions}{17}{section.13}%
+\contentsline {subsection}{\numberline {13.1}Why Not Just Use LLaVA?}{17}{subsection.13.1}%
+\contentsline {subsection}{\numberline {13.2}Why Use Explanations?}{17}{subsection.13.2}%
+\contentsline {subsection}{\numberline {13.3}Why Use LoRA?}{17}{subsection.13.3}%
+\contentsline {subsection}{\numberline {13.4}Why Does Base BART Have High STA?}{17}{subsection.13.4}%
+\contentsline {subsection}{\numberline {13.5}Why Is Proxy SIM So High But STA Lower?}{17}{subsection.13.5}%
+\contentsline {section}{\numberline {14}Three-Minute Presentation Script}{17}{section.14}%
+\contentsline {section}{\numberline {15}Code Map}{18}{section.15}%
