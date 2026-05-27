@@ -39,7 +39,13 @@ REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 PROXY_NUM_SOFT_TOKENS="${PROXY_NUM_SOFT_TOKENS:-16}"
 BART_SUFFIX="${BART_SUFFIX:-}"
 PROXY_SUFFIX="${PROXY_SUFFIX:-${BART_SUFFIX}}"
+INPUT_FORMAT="${INPUT_FORMAT:-legacy}"
+TASK_PREFIX="${TASK_PREFIX:-}"
 JOB_SUFFIX="${PROXY_SUFFIX//_/-}"
+TASK_PREFIX_ARGS=()
+if [ -n "${TASK_PREFIX}" ]; then
+    TASK_PREFIX_ARGS=(--task_prefix "${TASK_PREFIX}")
+fi
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -79,6 +85,7 @@ echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Group: ${GROUP_NUM}"
 echo "  Soft tokens: ${PROXY_NUM_SOFT_TOKENS}"
+echo "  Input fmt:   ${INPUT_FORMAT}"
 echo "  BART suffix: ${BART_SUFFIX}"
 echo "  Proxy suffix:${PROXY_SUFFIX}"
 echo "  Image: ${IMAGE}"
@@ -105,6 +112,8 @@ runai submit hmr-train-proxy${JOB_SUFFIX} \
         --batch_size 64 \
         --learning_rate 1e-3 \
         --num_soft_tokens ${PROXY_NUM_SOFT_TOKENS} \
+        --input_format ${INPUT_FORMAT} \
+        "${TASK_PREFIX_ARGS[@]}" \
         --seed 42
 
 echo "Proxy network training job submitted."

@@ -87,6 +87,8 @@ class ExplanationProxyTrainer:
         cache_dir: Optional[str] = None,
         device: Optional[str] = None,
         num_soft_tokens: int = 16,
+        input_format: str = "legacy",
+        task_prefix: str = "",
     ):
         """
         Initialize ExplanationProxyTrainer.
@@ -95,12 +97,16 @@ class ExplanationProxyTrainer:
             rewriter: MemeRewriter instance for getting BART hidden states
             clip_model_name: HuggingFace model identifier for CLIP
             device: Device to run on ('cuda', 'cpu'). Auto-detected if None.
+            input_format: Prompt format used for the BART full-condition targets.
+            task_prefix: Optional prefix prepended to the target prompts.
         """
         self.rewriter = rewriter
         self.clip_model_name = clip_model_name
         self.cache_dir = cache_dir
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.num_soft_tokens = num_soft_tokens
+        self.input_format = input_format
+        self.task_prefix = task_prefix
 
         # Load CLIP (must use clip-vit-large-patch14: 768-dim embeds → 1536 concat)
         logger.info(f"Loading CLIP model {clip_model_name}...")
@@ -240,6 +246,8 @@ class ExplanationProxyTrainer:
                 visual_evidence=ve,
                 implicit_meaning=im,
                 mode="full",
+                input_format=self.input_format,
+                task_prefix=self.task_prefix,
             )
             inputs = self.rewriter.tokenizer(
                 formatted_input,

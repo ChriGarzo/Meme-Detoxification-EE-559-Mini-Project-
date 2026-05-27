@@ -645,6 +645,33 @@ Latest `evaluation_summary.tsv` — all systems on the same 280 held-out test ex
 | `bart_finetuned_none` | 280 | 0.9508 | 0.1947 | 0.3308 | 0.6287 | 0.6512 | 0.0000 | -0.0054 |
 | `clip_proxy_bart_full` | 280 | 0.8787 | 0.1225 | 0.6004 | 0.6395 | 0.6488 | 0.0000 | -0.0030 |
 
+### Multi-Seed Variance Analysis
+
+The multi-seed ablation aggregate is written to:
+
+```
+/scratch/eval_results/hmr_multiseed_explicit_detox/aggregate/metric_variance_summary.tsv
+```
+
+It summarizes 5 complete seeds (`1 2 3 4 5`) for each evaluated system on the same 280 held-out test examples. All rows have `n = 5` and `expected_seeds = 5`, so the aggregate is complete. Values below are reported as mean +/- sample standard deviation across seeds.
+
+| System | Text STA | Text STA Delta | SIM | CLIP |
+|---|---:|---:|---:|---:|
+| `llava_teacher` | 0.9903 +/- 0.0000 | 0.2342 +/- 0.0000 | 0.4722 +/- 0.0000 | 0.6357 +/- 0.0000 |
+| `bart_finetuned_full` | 0.9634 +/- 0.0058 | 0.2073 +/- 0.0058 | 0.3304 +/- 0.0129 | 0.6284 +/- 0.0009 |
+| `bart_finetuned_target_only` | 0.9597 +/- 0.0053 | 0.2036 +/- 0.0053 | 0.3350 +/- 0.0132 | 0.6285 +/- 0.0016 |
+| `bart_finetuned_visual_only` | 0.9604 +/- 0.0040 | 0.2043 +/- 0.0040 | 0.2841 +/- 0.0799 | 0.6244 +/- 0.0071 |
+| `bart_finetuned_none` | 0.9567 +/- 0.0132 | 0.2006 +/- 0.0132 | 0.3250 +/- 0.0302 | 0.6277 +/- 0.0015 |
+| `clip_proxy_bart_full_explicit_detox` | 0.8844 +/- 0.0145 | 0.1282 +/- 0.0145 | 0.5806 +/- 0.0200 | 0.6380 +/- 0.0015 |
+
+The main conclusion is that the finetuned BART models are stable for textual detoxification. Across the four BART ablations, mean `text_sta` stays between 0.9567 and 0.9634, and mean `text_sta_delta` stays between 0.2006 and 0.2073. The `full` condition has the best average detoxification among BART runs, while `target_only` is very close and has the best average semantic similarity among the BART-only ablations.
+
+The conditioning ablation is clearest in the variance, not just the mean. `full` and `target_only` are the most reliable BART settings: their SIM standard deviations are low (`0.0129` and `0.0132`) and their CLIPScore is nearly unchanged across seeds. `none` is weaker because it has larger seed sensitivity in both text detoxification and semantic preservation. `visual_only` is the least reliable: seed 3 drops to SIM `0.1437` and CLIP `0.6119`, which pulls the five-seed mean down and produces the largest variance. Visual evidence alone therefore appears insufficient as a stable conditioning signal for the text rewrite task.
+
+The proxy model shows a different trade-off. It has the highest mean SIM (`0.5806`) and highest mean CLIPScore (`0.6380`), even above the repeated LLaVA teacher target on those metrics, but it has much lower detoxification strength (`text_sta = 0.8844`, `text_sta_delta = 0.1282`). This supports the interpretation that the proxy preserves the original text and image alignment well, but is less aggressive at removing toxicity.
+
+The LLaVA teacher has zero variance because the same teacher pseudo-rewrites are reused as the reference target for every seed. It should be read as a fixed upper-bound target, not as a trained multi-seed model. VisualBERT remains uninformative in this aggregate: `visualbert_sta` is `0.0000` for every system and every seed, and the tiny hate-probability changes do not alter the earlier caveat that this metric is not a reliable pass/fail detoxification signal here.
+
 ### Main Findings
 
 #### Fine-tuning ablation (BART base → BART finetuned)

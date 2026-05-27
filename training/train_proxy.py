@@ -17,6 +17,7 @@ Usage (cluster):
         --num_train_epochs 20 \
         --batch_size 64 \
         --learning_rate 1e-3 \
+        --input_format legacy \
         --seed 42
 """
 
@@ -175,6 +176,13 @@ def main():
     parser.add_argument("--learning_rate",       type=float, default=1e-3)
     parser.add_argument("--num_soft_tokens",     type=int,   default=16,
                         help="Number of proxy-predicted BART encoder soft tokens")
+    parser.add_argument("--input_format",
+                        type=str,
+                        default="legacy",
+                        choices=["legacy", "explicit_detox"],
+                        help="BART full-condition prompt format used as proxy target")
+    parser.add_argument("--task_prefix", type=str, default="",
+                        help="Optional prefix prepended to proxy target prompts")
     parser.add_argument("--seed",                type=int,   default=42)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -201,6 +209,9 @@ def main():
     print(f"  Batch size:   {args.batch_size}")
     print(f"  LR:           {args.learning_rate}")
     print(f"  Soft tokens:  {args.num_soft_tokens}")
+    print(f"  Input fmt:    {args.input_format}")
+    if args.task_prefix.strip():
+        print(f"  Task prefix:  {args.task_prefix.strip()}")
     if torch.cuda.is_available():
         print(f"  GPU:          {torch.cuda.get_device_name(0)}")
         print(f"  VRAM:         {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
@@ -256,6 +267,8 @@ def main():
         cache_dir=args.hf_cache,
         device=device,
         num_soft_tokens=args.num_soft_tokens,
+        input_format=args.input_format,
+        task_prefix=args.task_prefix,
     )
 
     # -----------------------------------------------------------------------
@@ -305,6 +318,8 @@ def main():
         "bart_hidden_size": rewriter.hidden_size,
         "clip_model": "openai/clip-vit-large-patch14",
         "bart_checkpoint_dir": args.bart_checkpoint_dir,
+        "input_format": args.input_format,
+        "task_prefix": args.task_prefix,
     }
     config_path = Path(args.output_dir) / "proxy_config.json"
     with open(config_path, "w") as f:

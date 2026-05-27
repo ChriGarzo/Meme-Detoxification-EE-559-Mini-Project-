@@ -208,6 +208,7 @@ def main():
     parser.add_argument("--output_dir", type=Path, required=True, help="Output directory")
     parser.add_argument("--hf_cache", type=str, default=None, help="Hugging Face cache directory")
     parser.add_argument("--load_in_4bit", action="store_true", help="Load model in 4-bit")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for generation")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 
     args = parser.parse_args()
@@ -218,9 +219,11 @@ def main():
     setup_logging(debug=args.debug)
     logger.info("Starting DetoxLLM baseline")
 
-    np.random.seed(42)
-    torch.manual_seed(42)
-    random.seed(42)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     records = load_validation_jsonl(args.validation_jsonl)
     logger.info(f"Loaded {len(records)} validation records")

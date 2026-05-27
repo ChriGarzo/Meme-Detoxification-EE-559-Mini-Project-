@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -420,6 +421,7 @@ def main() -> int:
     parser.add_argument("--max_examples", type=int, default=None)
     parser.add_argument("--skip_clipscore", action="store_true")
     parser.add_argument("--skip_visualbert", action="store_true")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible metrics")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -427,8 +429,11 @@ def main() -> int:
         os.environ["HF_HOME"] = args.hf_cache
 
     setup_logging(args.output_dir, debug=args.debug)
-    np.random.seed(42)
-    torch.manual_seed(42)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     max_examples = args.max_examples
     if args.debug and max_examples is None:
