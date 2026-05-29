@@ -1,10 +1,10 @@
 {
   "latex-workshop.latex.tools": [
     {
-      "name": "latexmk (xelatex)",
+      "name": "latexmk (pdfLaTeX)",
       "command": "latexmk",
       "args": [
-        "-xelatex",
+        "-pdf",
         "-synctex=1",
         "-interaction=nonstopmode",
         "-file-line-error",
@@ -14,10 +14,10 @@
   ],
   "latex-workshop.latex.recipes": [
     {
-      "name": "latexmk (xelatex)",
-      "tools": ["latexmk (xelatex)"]
+      "name": "latexmk (pdfLaTeX)",
+      "tools": ["latexmk (pdfLaTeX)"]
     }
   ],
-  "latex-workshop.latex.recipe.default": "latexmk (xelatex)",
+  "latex-workshop.latex.recipe.default": "latexmk (pdfLaTeX)",
   "latex-workshop.latex.autoBuild.run": "onSave"
 }
