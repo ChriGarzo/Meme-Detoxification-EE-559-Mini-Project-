@@ -21,7 +21,6 @@ GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 
-N_SAMPLES="${N_SAMPLES:-20}"
 SEED="${SEED:-42}"
 EVAL_SUFFIX="${EVAL_SUFFIX:-}"
 
@@ -44,7 +43,7 @@ echo "  BART checkpoint  : ${BART_CHECKPOINT}"
 echo "  Proxy checkpoint : ${PROXY_CHECKPOINT}"
 echo "  HF cache         : ${HF_CACHE}"
 echo "  Output           : ${OUTPUT_DIR}"
-echo "  Samples          : ${N_SAMPLES}  (seed=${SEED})"
+echo "  Seed             : ${SEED}"
 echo "  Image            : ${IMAGE}"
 echo ""
 
@@ -65,8 +64,7 @@ runai submit "${JOB_NAME}" \
         --proxy_checkpoint "${PROXY_CHECKPOINT}" \
         --hf_cache       "${HF_CACHE}" \
         --output_dir     "${OUTPUT_DIR}" \
-        --seed           "${SEED}" \
-        --n_samples      "${N_SAMPLES}"
+        --seed           "${SEED}"
 
 echo ""
 echo "Job submitted: ${JOB_NAME}"

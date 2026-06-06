@@ -86,6 +86,15 @@ from models.proxy import ExplanationProxy
 # ---------------------------------------------------------------------------
 logger = logging.getLogger("screencast_demo")
 
+# 20 test examples selected to represent the full performance spectrum:
+# strong detoxification successes, moderate improvements (SIM trade-off),
+# failures to detoxify, well-preserved already-clean texts, and regressions.
+_SELECTED_IDS = [
+    "389", "1235", "1024679239059161088", "2040", "2357", "2527",
+    "2670", "5321", "5383", "6114", "6155", "6882",
+    "7283", "8093", "8288", "8645", "9774", "10523", "11098", "11180",
+]
+
 _SEP_HEAVY = "═" * 66
 _SEP_LIGHT = "─" * 66
 
@@ -519,7 +528,6 @@ def parse_args() -> argparse.Namespace:
         default=Path("/scratch/eval_results/screencast_demo"),
     )
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--n_samples", type=int, default=20)
     return p.parse_args()
 
 
@@ -539,26 +547,21 @@ def main() -> int:
     logger.info(_SEP_HEAVY)
     logger.info("  Pipeline  : CLIP Proxy  +  BART-large FT Full")
     logger.info("  Device    : %s", device)
-    logger.info("  Seed      : %d", args.seed)
-    logger.info("  Samples   : %d", args.n_samples)
+    logger.info("  Examples  : %d", len(_SELECTED_IDS))
     logger.info("  Test set  : %s", args.input_jsonl)
     logger.info("")
 
     # -----------------------------------------------------------------------
-    # Step 1: Load and sample test examples
+    # Step 1: Load test examples
     # -----------------------------------------------------------------------
-    log_section("Step 1 -- Loading test set and sampling examples")
+    log_section("Step 1 -- Loading test set and selecting examples")
 
     all_examples = load_test_examples(args.input_jsonl)
     logger.info("  Total examples in test set : %d", len(all_examples))
 
-    if len(all_examples) < args.n_samples:
-        raise ValueError(
-            f"Test set has only {len(all_examples)} examples, "
-            f"cannot sample {args.n_samples}."
-        )
-    sampled = random.sample(all_examples, args.n_samples)
-    logger.info("  Sampled (seed=%d)           : %d examples", args.seed, len(sampled))
+    id_index = {ex["id"]: ex for ex in all_examples}
+    sampled = [id_index[id_] for id_ in _SELECTED_IDS if id_ in id_index]
+    logger.info("  Evaluating                 : %d examples", len(sampled))
     logger.info("  IDs: %s", ", ".join(ex["id"] for ex in sampled))
 
     # -----------------------------------------------------------------------
@@ -644,7 +647,7 @@ def main() -> int:
 
         log_example_result(
             idx=idx,
-            n_total=args.n_samples,
+            n_total=len(sampled),
             example=example,
             rewrite=rewrite,
             sta_orig=sta_orig,
@@ -671,7 +674,7 @@ def main() -> int:
     # -----------------------------------------------------------------------
     log_section("Step 5 -- Aggregate results")
     log_aggregate_summary(
-        n=args.n_samples,
+        n=len(sampled),
         sta_scores=sta_scores,
         delta_scores=delta_scores,
         sim_scores=sim_scores,
