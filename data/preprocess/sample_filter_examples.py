@@ -1,22 +1,18 @@
 """
-Sample filter examples from Stage 0 manifests.
+Companion diagnostic script for Stage 0: stratified image sampling from filter manifests.
 
-Reads the three per-dataset manifests produced by filter_meme_images.py and
-copies a random sample of kept and discarded images into an output directory
-so you can visually inspect the quality of the filter.
+Reads the per-dataset manifests produced by filter_meme_images.py and copies
+a stratified random sample of kept and discarded images into an output directory
+for visual inspection of filter quality.
 
 Output layout:
-    <output_dir>/                 (default: /scratch/hmr_data/filtering_results)
+    <output_dir>/
         kept/
-            harmeme/
-            mami/
-            mmhs150k/
+            harmeme/ | mami/ | mmhs150k/
         discarded/
-            harmeme/
-            mami/
-            mmhs150k/
+            harmeme/ | mami/ | mmhs150k/
 
-Usage example:
+Usage:
     python data/preprocess/sample_filter_examples.py \\
         --harmeme_manifest  /scratch/hmr_data/harmeme/manifest.csv \\
         --mami_manifest     /scratch/hmr_data/mami/manifest.csv \\
@@ -37,15 +33,10 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Manifest loading
-# ---------------------------------------------------------------------------
+# ── Manifest loading ──────────────────────────────────────────────────────
 
 def load_manifest(manifest_path: str, dataset_name: str) -> List[dict]:
-    """
-    Load a Stage 0 manifest CSV and return a list of row dicts.
-    The 'kept' field is normalised to a Python bool.
-    """
+    """Parse a Stage 0 manifest CSV; normalise the 'kept' column to bool."""
     path = Path(manifest_path)
     if not path.exists():
         logger.error(f"Manifest not found for {dataset_name}: {path}")
@@ -67,9 +58,7 @@ def load_manifest(manifest_path: str, dataset_name: str) -> List[dict]:
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Sampling and copying
-# ---------------------------------------------------------------------------
+# ── Sampling and copying ──────────────────────────────────────────────────
 
 def sample_and_copy(
     rows: List[dict],
@@ -79,10 +68,10 @@ def sample_and_copy(
     seed: int,
 ) -> None:
     """
-    Sample up to n_examples kept and n_examples discarded images from `rows`
-    and copy them into:
-        output_dir / dataset_name / kept /
-        output_dir / dataset_name / discarded /
+    Draw up to n_examples kept and n_examples discarded images from `rows`
+    and copy them into output_dir/{kept,discarded}/<dataset_name>/.
+
+    Missing source files are counted and reported but do not abort the run.
     """
     rng = random.Random(seed)
 
@@ -112,7 +101,6 @@ def sample_and_copy(
             + (f" ({missing} source files missing)" if missing else "")
         )
 
-    # Print a compact per-dataset summary
     print(
         f"  {dataset_name:<12}  "
         f"kept={len(kept_rows):>6}  discarded={len(discarded_rows):>6}  "
@@ -121,9 +109,7 @@ def sample_and_copy(
     )
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Entry point ───────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(

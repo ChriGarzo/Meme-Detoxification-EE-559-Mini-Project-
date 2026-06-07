@@ -15,8 +15,8 @@ set -e
 #   - All pipeline stages have completed at least once.
 #   - Emissions CSVs exist under /scratch/hmr_stage1_output/ and
 #     /scratch/hmr_eval_*/ (produced automatically during inference).
-#   - /scratch/hmr_stage2_phase2_*/training_history.json exists
-#     (produced by train_stage2_phase2.py).
+#   - /scratch/hmr_stage2_*/training_history.json exists
+#     (produced by train_stage2.py).
 #
 # Outputs:
 #   /scratch/hmr_co2_summary/pipeline_co2_summary.json

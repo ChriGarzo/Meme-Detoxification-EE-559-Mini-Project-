@@ -1,12 +1,14 @@
 """
-Generate the poster-ready compute/emissions figure.
+Generate the poster-ready compute/emissions figure (lollipop charts).
 
-The figure has two rows:
-  1. Total GPU time and emissions for the training pipeline stages.
-  2. Per-image GPU time and emissions for the compared inference systems.
+Two rows of 2 panels each:
+  Row 1 — total GPU time (h) and CO2 (g) for training-pipeline stages.
+  Row 2 — per-image GPU time (s) and CO2 (mg) for inference systems.
 
-Values are rendered as compact log-scale lollipop charts so small deployed
-models remain visible beside the teacher-generation costs.
+Lollipop style is chosen because the dynamic range across systems spans ~3
+orders of magnitude; a log-scaled dot-stem keeps all bars readable.
+
+Writes: poster_template_DL/figures/compute_emissions_lollipop.{pdf,png,svg}
 """
 
 from pathlib import Path
@@ -78,9 +80,8 @@ COLORS = {
     "proxy_network": "#CC79A7",
 }
 
-# Per-image benchmark values. LLaVA and DetoxLLM come from the
-# single-inference benchmark table in README.md. Proxy+BART is derived from the
-# reported 280-example proxy run: 3.4 min and 0.5 g CO2 over 280 examples.
+# LLaVA and DetoxLLM values from benchmark_single_inference.py.
+# Proxy+BART derived from the 280-example proxy run: 3.4 min, 0.5 g CO2 total.
 INFERENCE_ROWS = [
     {
         "label": "LLaVA\nteacher",
@@ -113,6 +114,7 @@ INFERENCE_ROWS = [
 
 
 def configure_style() -> None:
+    """Apply journal/poster-safe rcParams: DejaVu Sans, no top/right spines, embeddable fonts."""
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
@@ -135,6 +137,7 @@ def configure_style() -> None:
 
 
 def plot_panel(ax, rows, key, labels_key, title, xlabel, xmin, xmax, *, show_ylabels=True):
+    """Draw a horizontal lollipop chart on ax for a single metric column."""
     y = np.arange(len(rows))[::-1]
     values = np.array([row[key] for row in rows])
     colors = [COLORS[row["kind"]] for row in rows]

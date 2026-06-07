@@ -101,7 +101,7 @@ echo "=== Finetuned BART inference ==="
 for COND in full target_only visual_only none; do
     run_stage2_if_needed \
         "${COND}" \
-        "${STAGES_ROOT}/hmr_stage2_phase2_${COND}${CHECKPOINT_SUFFIX}_checkpoint" \
+        "${STAGES_ROOT}/hmr_stage2_${COND}${CHECKPOINT_SUFFIX}_checkpoint" \
         "${EVAL_ROOT}/hmr_eval_stage2_${COND}${EVAL_SUFFIX}"
 done
 
@@ -136,7 +136,7 @@ fi
 # ---------------------------------------------------------------------------
 PROXY_OUTPUT_DIR="${EVAL_ROOT}/hmr_eval_clip_proxy_bart_full${EVAL_SUFFIX}"
 PROXY_OUTPUT_FILE="${PROXY_OUTPUT_DIR}/stage2_rewrites_clip_proxy_bart_full.jsonl"
-BART_CHECKPOINT="${STAGES_ROOT}/hmr_stage2_phase2_full${CHECKPOINT_SUFFIX}_checkpoint"
+BART_CHECKPOINT="${STAGES_ROOT}/hmr_stage2_full${CHECKPOINT_SUFFIX}_checkpoint"
 
 echo "=== Proxy + BART inference ==="
 NEED_PROXY_RECOMPUTE=0

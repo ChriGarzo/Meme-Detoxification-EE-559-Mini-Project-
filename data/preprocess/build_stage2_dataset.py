@@ -1,13 +1,28 @@
 """
-Build Stage 2 BART training dataset from merged Stage 1 pseudo-rewrites.
+Stage 2 dataset construction: build BART training data from Stage 1 pseudo-rewrites.
 
-Pipeline:
-1. Read `train_pseudo_rewrites_merged.jsonl`
-2. Filter out rows with parse errors
-3. Keep only rows that passed Stage 1 quality filters
-4. Keep only rows with strictly positive toxicity drop
-5. Build Stage 2 records
-6. Split train/val and write JSONL outputs
+Data source   : train_pseudo_rewrites_merged.jsonl (merged Stage 1 LLaVA outputs).
+Output        : train.jsonl, val.jsonl, and optionally test.jsonl in --output_dir,
+                plus a dataset_statistics.json manifest.
+
+Quality filter chain applied to each pseudo-rewrite row
+--------------------------------------------------------
+1. parse_error == False      — drop rows where the Stage 1 JSON parser failed.
+2. passed_stage1_filters     — drop rows that did not meet Stage 1 quality gates
+                               (STA threshold, BERTScore floor, etc.); disable
+                               with --allow_failed_stage1_filters.
+3. toxicity_drop > 0         — require a strictly positive text-toxicity reduction;
+                               adjustable via --min_toxicity_drop.
+4. Rewrite text sanity       — sanitize_rewrite_text() strips artifacts (URLs,
+                               mentions, hashtags, LLM preambles), then
+                               is_valid_rewrite_text() discards near-copies,
+                               repetition-heavy, symbol-heavy, or near-empty outputs.
+5. source_similarity ceiling — optionally drop near-verbatim pseudo-rewrites via
+                               --max_source_similarity (normalized char similarity).
+
+Val / test sets are built from dedicated Stage 1 output files when provided
+(--val_rewrites_path, --test_rewrites_path); otherwise val is an internal
+random split of the train data (legacy fallback, not recommended for evaluation).
 """
 
 import argparse
@@ -28,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def make_debug_dataset() -> List[Dict]:
-    """Create a small debug dataset for testing."""
+    """Return two hard-coded examples for smoke-testing the build pipeline."""
     debug_examples = [
         {
             "id": "debug_001",
@@ -73,7 +88,7 @@ def _extract_passed_stage1_filters(row: Dict) -> bool:
 
 
 def load_merged_rewrites(merged_path: str) -> List[Dict]:
-    """Load and normalize rows from train_pseudo_rewrites_merged.jsonl."""
+    """Parse a merged pseudo-rewrite JSONL and normalise each row into a flat dict."""
     path = Path(merged_path)
     if not path.exists():
         logger.error(f"Merged pseudo-rewrite file not found: {path}")
@@ -128,10 +143,13 @@ def filter_rows_for_stage2(
     require_passed_stage1_filters: bool = True,
 ) -> tuple[List[Dict], Dict[str, int]]:
     """
-    Keep only examples with:
-    1) parse_error == False
-    2) passed_stage1_filters == True (default)
-    3) toxicity_drop > min_toxicity_drop
+    Apply quality gates to Stage 1 pseudo-rewrite rows; return (kept, drop_counts).
+
+    Gates applied in order:
+      1. parse_error == False
+      2. passed_stage1_filters == True (skipped when require_passed_stage1_filters=False)
+      3. toxicity_drop is not None
+      4. toxicity_drop > min_toxicity_drop  (strictly positive by default)
     """
     kept: List[Dict] = []
     dropped = {
@@ -186,7 +204,7 @@ def _normalize_for_compare(text: str) -> str:
 
 
 def normalized_char_similarity(a: str, b: str) -> float:
-    """Cheap copy-risk score for filtering near-identical pseudo rewrites."""
+    """Character-level SequenceMatcher ratio after whitespace/punct normalisation; used as a copy-risk score."""
     import difflib
 
     left = _normalize_for_compare(a)
@@ -197,14 +215,23 @@ def normalized_char_similarity(a: str, b: str) -> float:
 
 
 def sanitize_rewrite_text(text: str) -> str:
-    """Normalize rewrite text into plain meme sentence format."""
+    """
+    Strip LLM generation artifacts and normalise whitespace in a pseudo-rewrite.
+
+    Handles: Llama [/INST] suffixes, markdown code fences, leading "Rewrite:"
+    labels, Twitter mentions/hashtags, URLs, bullet/replacement Unicode chars,
+    repeated punctuation, and surrounding quotes.
+    """
     cleaned = (text or "").strip()
     if not cleaned:
         return ""
 
+    # Llama-style instruction-following models echo the [/INST] delimiter;
+    # keep only the text generated after it.
     if "[/INST]" in cleaned:
         cleaned = cleaned.split("[/INST]")[-1].strip()
 
+    # Strip markdown code fences occasionally emitted by chat-tuned models.
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         if lines:
@@ -220,6 +247,7 @@ def sanitize_rewrite_text(text: str) -> str:
     cleaned = URL_RE.sub(" ", cleaned)
     cleaned = DOMAIN_RE.sub(" ", cleaned)
     cleaned = cleaned.replace("\u2022", " ").replace("\ufffd", " ")
+    # Collapse runs of the same punctuation mark (e.g. "!!!" \u2192 "!").
     cleaned = re.sub(r"([!?.,;:])\1{2,}", r"\1", cleaned)
     cleaned = re.sub(r"\s+([!?.,;:])", r"\1", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -228,7 +256,21 @@ def sanitize_rewrite_text(text: str) -> str:
 
 
 def is_valid_rewrite_text(rewrite: str, original_text: str) -> tuple[bool, str]:
-    """Reject rewrite targets with URL/artifact/repetition issues."""
+    """
+    Post-sanitisation validity check; return (True, "") or (False, rejection_reason).
+
+    Rejection criteria (applied in order):
+      empty       — zero-length after sanitisation.
+      url/mention/hashtag — residual social-media tokens after sanitisation.
+      too_short   — fewer than 2 whitespace-delimited tokens.
+      too_long    — exceeds 280 characters (Twitter meme register heuristic).
+      low_diversity — for sequences >= 8 tokens, type-token ratio < 0.35
+                      indicates degenerate repetitive output.
+      repetition  — any single token accounts for > 45% of the token sequence.
+      symbol_heavy — non-alphanumeric, non-space character ratio > 35%;
+                     flags garbled or encoding-corrupted outputs.
+      no_edit     — normalised form is identical to the original meme text.
+    """
     text = (rewrite or "").strip()
     if not text:
         return False, "empty"
@@ -301,9 +343,12 @@ def create_input_format(
 
 def build_training_data(examples: List[Dict]) -> List[Dict]:
     """
-    Build training data from loaded examples.
+    Convert quality-filtered Stage 1 rows into BART training records.
 
-    Creates records with fields: id, input_text, target_text, condition, dataset
+    Each record carries: id, image_path, input_text (full-condition format),
+    target_text, raw conditioning fields (original_text, target_group,
+    visual_evidence, implicit_meaning), Stage 1 quality scores, and
+    a source_similarity score for downstream copy-risk filtering.
     """
     training_data = []
     rejected_quality = 0
@@ -334,11 +379,12 @@ def build_training_data(examples: List[Dict]) -> List[Dict]:
         training_record = {
             "id": example_id,
             "image_path": example.get("image_path", ""),
-            # Pre-formatted full-condition input (used as-is for condition=full)
+            # Pre-formatted full-condition encoder input; used as-is when
+            # condition="full" in train_stage2.py.  Raw fields below let
+            # train_stage2.py reformat the input for ablation conditions
+            # (target_only, visual_only, none).
             "input_text": input_text,
             "target_text": pseudo_rewrite,
-            # Raw fields stored separately so train_stage2_phase2.py can
-            # reformat the input for conditions other than 'full'
             "original_text": original_text,
             "target_group": target_group,
             "visual_evidence": visual_evidence,
@@ -368,7 +414,13 @@ def split_train_val(
     train_ratio: float = 0.9,
     seed: int = 42
 ) -> Tuple[List[Dict], List[Dict]]:
-    """Split examples into training and validation sets."""
+    """
+    Randomly partition examples into (train, val) at the given ratio.
+
+    This is the legacy fallback used when no dedicated val JSONL is provided;
+    note that it draws val from the same distribution as train, which is
+    unsuitable for final model selection.
+    """
     random.seed(seed)
     random.shuffle(examples)
 
@@ -381,7 +433,7 @@ def split_train_val(
 
 
 def write_jsonl(examples: List[Dict], output_path: str):
-    """Write examples to JSONL file."""
+    """Serialise a list of dicts to a newline-delimited JSON file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -485,14 +537,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    # Set seeds for reproducibility. In lightweight preprocessing environments
-    # torch may be unavailable; keep deterministic behavior with random.
+    # set_seeds imports torch; fall back gracefully in CPU-only preprocessing
+    # environments where torch may not be installed.
     try:
         set_seeds(args.seed)
     except ModuleNotFoundError as e:
@@ -522,11 +573,9 @@ def main():
     if args.hf_cache:
         logger.info("--hf_cache is ignored by build_stage2_dataset.py (kept for compatibility).")
 
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data
     if args.debug:
         logger.warning("DEBUG MODE ENABLED: Using small debug dataset, skipping parse/toxicity filtering")
         examples = make_debug_dataset()
@@ -553,7 +602,6 @@ def main():
             logger.error("All examples filtered out by parse_error/toxicity_drop conditions")
             return 1
 
-    # Build training data
     training_data = build_training_data(examples)
     if not training_data:
         logger.error("Failed to build training data")
@@ -575,7 +623,6 @@ def main():
             logger.error("All examples filtered out by --max_source_similarity")
             return 1
 
-    # Build val data: from dedicated val rewrites path, or fall back to internal split
     val_data: List[Dict] = []
     if val_rewrites_path:
         val_raw = load_merged_rewrites(val_rewrites_path)
@@ -610,7 +657,6 @@ def main():
             1 - args.train_ratio,
         )
 
-    # Build test data if path provided
     test_data: List[Dict] = []
     if test_rewrites_path:
         test_raw = load_merged_rewrites(test_rewrites_path)
@@ -631,7 +677,6 @@ def main():
             ]
         logger.info("Built test set: %d examples", len(test_data))
 
-    # Write outputs
     train_path = output_dir / "train.jsonl"
     val_path = output_dir / "val.jsonl"
 
@@ -642,7 +687,6 @@ def main():
         test_path = output_dir / "test.jsonl"
         write_jsonl(test_data, str(test_path))
 
-    # Dataset statistics
     from collections import Counter
     dataset_counts     = Counter(e.get("dataset",      "unknown") for e in training_data)
     target_group_counts = Counter(e.get("target_group", "null")   for e in training_data)
@@ -651,7 +695,8 @@ def main():
         for e in training_data
     )
 
-    # Save dataset_statistics.json — persists all key distribution info for the report
+    # Persist full build configuration and data distribution for reproducibility
+    # and reporting; does not affect model training.
     stats = {
         "build_config": {
             "stage1_dir": args.stage1_dir,

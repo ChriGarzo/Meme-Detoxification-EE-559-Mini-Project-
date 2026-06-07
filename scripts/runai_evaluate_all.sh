@@ -14,7 +14,7 @@ set -e
 #   PROXY_CHECKPOINT   path to proxy .pt file (default: /scratch/hmr_proxy_checkpoint/best_proxy.pt)
 #
 # Prerequisites:
-#   - Stage 2 Phase 2 (all 4 conditions) completed
+#   - Stage 2 (all 4 conditions) completed
 #   - Proxy network training completed
 # =============================================================================
 

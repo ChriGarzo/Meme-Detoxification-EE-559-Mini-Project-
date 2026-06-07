@@ -1,19 +1,21 @@
 """
-Benchmark single-step inference time and CO2 for each compared system:
+Measure per-example latency and CO2 for each compared inference system.
 
-  llava_teacher   LLaVA-Next 7B  — explain + rewrite one meme (2 forward passes)
-  detoxllm        DetoxLLM 7B    — rewrite one text (text-only baseline)
-  bart_finetuned  BART-large 400M — rewrite one text (our model, 'full' condition)
+Systems benchmarked:
+  llava_teacher   LLaVA-Next 7B      — explain() + generate_rewrite() (2 forward passes)
+  detoxllm        DetoxLLM 7B        — text-only baseline rewrite
+  bart_finetuned  BART-large (LoRA)  — our model, condition=full
 
-Models are loaded and released sequentially so peak VRAM stays within 40 GB.
-Each model runs N_WARMUP warmup passes (not timed), then N_BENCH timed passes
-under a CodeCarbon tracker.  Mean, median, and std of wall-clock time are
-reported together with estimated CO2 per inference.
+Models are loaded and released sequentially to keep peak VRAM ≤ 40 GB.
+N_WARMUP passes (unjitted, not timed) precede N_BENCH CodeCarbon-tracked passes;
+mean, median, and std of wall-clock time are reported alongside CO2/inference.
+
+Outputs: inference_benchmark.json, benchmark.log, per-model emissions_*.csv
 
 Usage:
     python analysis/benchmark_single_inference.py \\
         --validation_jsonl /scratch/hmr_stage2_dataset/val.jsonl \\
-        --checkpoint_dir   /scratch/hmr_stage2_phase2_full_checkpoint \\
+        --checkpoint_dir   /scratch/hmr_stage2_full_checkpoint \\
         --hf_cache         /scratch/hf_cache \\
         --output_dir       /scratch/hmr_inference_benchmark
 
@@ -37,9 +39,7 @@ import numpy as np
 import torch
 from codecarbon import EmissionsTracker
 
-# ------------------------------------------------------------------
-# Path setup so imports work whether called from repo root or analysis/
-# ------------------------------------------------------------------
+# sys.path insertion lets this script be invoked from analysis/ or repo root.
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
 if str(_REPO) not in sys.path:
@@ -62,7 +62,7 @@ def setup_logging(output_dir: Path, debug: bool = False) -> None:
 
 
 def load_example(validation_jsonl: Path) -> Dict[str, Any]:
-    """Load first record from the validation JSONL."""
+    """Return the first non-empty record from the validation JSONL."""
     with open(validation_jsonl, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -77,9 +77,7 @@ def load_example(validation_jsonl: Path) -> Dict[str, Any]:
     raise ValueError(f"No records found in {validation_jsonl}")
 
 
-# ------------------------------------------------------------------
-# LLaVA benchmark
-# ------------------------------------------------------------------
+# ── LLaVA benchmark ───────────────────────────────────────────────────────────
 
 def benchmark_llava(
     example: Dict[str, Any],
@@ -146,9 +144,7 @@ def benchmark_llava(
     return result
 
 
-# ------------------------------------------------------------------
-# DetoxLLM benchmark
-# ------------------------------------------------------------------
+# ── DetoxLLM benchmark ────────────────────────────────────────────────────────
 
 def benchmark_detoxllm(
     example: Dict[str, Any],
@@ -211,9 +207,7 @@ def benchmark_detoxllm(
     return result
 
 
-# ------------------------------------------------------------------
-# BART finetuned benchmark
-# ------------------------------------------------------------------
+# ── BART finetuned benchmark ──────────────────────────────────────────────────
 
 def benchmark_bart_finetuned(
     example: Dict[str, Any],
@@ -287,9 +281,7 @@ def benchmark_bart_finetuned(
     return result
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_result(
     system: str,
@@ -309,7 +301,7 @@ def _make_result(
         "num_parameters": num_params,
         "num_parameters_M": round(num_params / 1e6, 1),
         "load_time_s": round(load_time_s, 2),
-        "n_warmup": len(times_ms),  # stored for reference, actually n_bench used
+        "n_warmup": len(times_ms),  # actual timed-pass count stored here for reference
         "n_bench": n_bench,
         "mean_ms": round(float(arr.mean()), 1),
         "median_ms": round(float(np.median(arr)), 1),
@@ -318,8 +310,8 @@ def _make_result(
         "max_ms": round(float(arr.max()), 1),
         "total_co2_kg_for_bench": total_co2_kg,
         "co2_per_inference_kg": co2_per_inference_kg,
-        "co2_per_inference_ug": round(co2_per_inference_kg * 1e9, 4),  # nanograms → micrograms
-        "co2_per_358_examples_mg": round(co2_per_inference_kg * 358 * 1e6, 4),
+        "co2_per_inference_ug": round(co2_per_inference_kg * 1e9, 4),  # kg → μg
+        "co2_per_358_examples_mg": round(co2_per_inference_kg * 358 * 1e6, 4),  # test-set total
         "note": note,
     }
 
@@ -364,7 +356,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--checkpoint_dir", type=Path,
-        default=Path("/scratch/hmr_stage2_phase2_full_checkpoint"),
+        default=Path("/scratch/hmr_stage2_full_checkpoint"),
         help="Path to fine-tuned BART checkpoint (condition=full by default)",
     )
     parser.add_argument("--hf_cache", type=str, default="/scratch/hf_cache")
@@ -381,7 +373,7 @@ def main() -> int:
         os.environ["HF_HOME"] = args.hf_cache
 
     setup_logging(args.output_dir, debug=args.debug)
-    logger.info("Single-inference benchmark starting")
+    logger.info("Single-inference benchmark")
     logger.info("  validation_jsonl : %s", args.validation_jsonl)
     logger.info("  checkpoint_dir   : %s", args.checkpoint_dir)
     logger.info("  hf_cache         : %s", args.hf_cache)

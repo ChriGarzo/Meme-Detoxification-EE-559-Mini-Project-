@@ -1,23 +1,7 @@
 # Stage 2 — BART Rewriter Training
 
-# Phase 1: ParaDetox warm-up
-phase1:
-  model_name: "facebook/bart-large"
-  learning_rate: 5.0e-5
-  batch_size: 16
-  num_epochs: 2
-  warmup_steps: 500
-  weight_decay: 0.01
-  fp16: true
-  predict_with_generate: true
-  generation_max_length: 128
-  save_steps: 200
-  eval_steps: 200
-  logging_steps: 50
-  bertscore_filter_threshold: 0.5
-
-# Phase 2: Meme conditioning fine-tune
-phase2:
+# Stage 2: Meme conditioning fine-tune
+training:
   learning_rate: 3.0e-4
   batch_size: 8
   num_epochs: 5

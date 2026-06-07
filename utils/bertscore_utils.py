@@ -1,12 +1,13 @@
 """
-BERTScore utility wrapper for the hateful meme rewriting pipeline.
+BERTScore batch computation helpers for the hateful meme rewriting pipeline.
 
-Used in:
-  - run_stage1.py: quality filter for pseudo-rewrites (BERTScore > 0.4)
+The main usage pattern is: call create_bertscore_scorer() once to load model
+weights, then pass the returned scorer to compute_bertscore_batch() in a loop.
+This avoids per-call model reloading and is used by run_stage1.py to quality-
+filter pseudo-rewrites (threshold: F1 > 0.4).
 
-For per-example scoring in a loop, use create_bertscore_scorer() to load the
-model once, then pass the scorer to compute_bertscore_batch() to avoid
-reloading weights on every call.
+Returns rescaled roberta-large F1 by default; scores are approximately in [0, 1]
+after baseline rescaling but can be negative on very poor candidates.
 """
 
 import logging
@@ -21,15 +22,7 @@ def create_bertscore_scorer(
     rescale_with_baseline: bool = True,
     device: Optional[str] = None,
 ):
-    """
-    Create and return a BERTScorer instance with the model loaded once.
-
-    Use this when scoring many examples one-by-one in a loop to avoid
-    reloading the model on every call. Pass the returned scorer to
-    compute_bertscore_batch() via the `scorer` argument.
-
-    Returns None if bert_score is not installed.
-    """
+    """Load and return a BERTScorer; returns None if bert_score is not installed."""
     try:
         from bert_score import BERTScorer
         import torch
@@ -57,23 +50,13 @@ def compute_bertscore_batch(
     device: Optional[str] = None,
     scorer=None,
 ) -> List[float]:
-    """
-    Compute BERTScore F1 for a list of (reference, candidate) pairs.
+    """Return BERTScore F1 for each (reference, candidate) pair.
 
-    Args:
-        references:              List of reference strings (originals)
-        candidates:              List of candidate strings (rewrites)
-        model_type:              HuggingFace model used for BERTScore (default: roberta-large)
-        lang:                    Language code (default: 'en')
-        rescale_with_baseline:   Whether to rescale scores with a baseline (recommended)
-        batch_size:              Batch size for BERTScore computation
-        device:                  Device string ('cuda' / 'cpu'). Auto-detected if None.
-        scorer:                  Pre-loaded BERTScorer instance from create_bertscore_scorer().
-                                 If provided, skips model loading (use this in loops).
+    Pass a pre-loaded scorer from create_bertscore_scorer() to avoid reloading
+    model weights on every call. Returns 0.5 on ImportError and 0.0 on runtime
+    failure so upstream quality filters degrade gracefully.
 
-    Returns:
-        List of F1 BERTScore values (one per pair), floats in roughly [0, 1].
-        Returns a list of 0.0 values if bert_score is unavailable or fails.
+    scorer: pre-loaded BERTScorer; if None a fresh scorer is constructed.
     """
     if len(references) != len(candidates):
         raise ValueError(
@@ -85,7 +68,6 @@ def compute_bertscore_batch(
         return []
 
     try:
-        # Use pre-loaded scorer if provided (avoids reloading the model every call)
         if scorer is not None:
             _, _, F1 = scorer.score(
                 cands=candidates,
@@ -113,11 +95,8 @@ def compute_bertscore_batch(
         return F1.tolist()
 
     except ImportError:
-        logger.warning(
-            "bert_score package not installed. Returning dummy scores of 0.5. "
-            "Install with: pip install bert-score"
-        )
+        logger.warning("bert_score not installed; returning 0.5 fallback (pip install bert-score)")
         return [0.5] * len(references)
     except Exception as e:
-        logger.error(f"BERTScore computation failed: {e}")
+        logger.error("BERTScore computation failed: %s", e)
         return [0.0] * len(references)

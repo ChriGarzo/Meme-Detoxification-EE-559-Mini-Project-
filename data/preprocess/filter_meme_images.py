@@ -1,21 +1,27 @@
 """
-Stage 0: Filter meme images using OCR and CLIP.
+Stage 0: OCR + CLIP filtering of raw meme image collections.
 
-This script filters meme images by:
-1. Extracting text via EasyOCR (keep 10-300 characters)
-2. Using CLIP to distinguish memes from screenshots
+Data sources  : HarMeme (di-dimitrov/mmf), MAMI (SemEval-2022 Task 5),
+                MMHS150K (Gomez et al. 2020, Twitter images).
+Output        : per-dataset CSV manifest with OCR/CLIP scores and a `kept` flag.
+Downstream    : build_unified_splits.py consumes these manifests to restrict
+                the labelled pool before stratified split construction.
 
-CLIP logic is dataset-specific:
-  - harmeme / mami : original binary check (2 prompts, keep if meme_score > screenshot_score)
-  - mmhs150k       : stricter multi-class check (5 prompts, keep only if the meme prompt
-                     has the highest softmax probability AND exceeds a minimum threshold).
-                     MMHS150K originates from Twitter and contains many non-meme images
-                     (plain photos, social-media video thumbnails, phone UI screenshots)
+Two-stage filter applied to every image
+---------------------------------------
+1. OCR (EasyOCR): discard images whose extracted text falls outside [10, 300]
+   characters — too few characters indicates a blank/logo image; too many
+   indicates a dense screenshot rather than a typical meme overlay.
+2. CLIP: distinguish meme images from non-meme images.
+
+CLIP strategy is dataset-specific:
+  - harmeme / mami : binary check (2 prompts); keep if meme_score > screenshot_score.
+  - mmhs150k       : stricter multi-class check (5 prompts, threshold = 0.45).
+                     MMHS150K originates from Twitter and contains many non-meme
+                     images (plain photos, video thumbnails, phone UI screenshots)
                      that slip through the simpler binary filter.
 
-Output: CSV manifest with OCR/CLIP scores and filtering decisions.
-
-To visually inspect results after filtering, use the companion script:
+To visually inspect filtering decisions, run the companion script:
     data/preprocess/sample_filter_examples.py
 """
 
@@ -55,19 +61,19 @@ logger = logging.getLogger(__name__)
 
 
 class MemeImageFilter:
-    """Filter meme images using OCR and CLIP."""
+    """OCR + CLIP filter for raw meme image collections."""
 
     def __init__(self, hf_cache: Optional[str] = None, debug: bool = False,
                  mmhs150k_clip_threshold: Optional[float] = None):
         """
-        Initialize OCR and CLIP models.
+        Load EasyOCR and CLIP models.
 
         Args:
-            hf_cache: HuggingFace cache directory
-            debug: If True, skip filtering and return all images
-            mmhs150k_clip_threshold: Override the CLIP threshold used for
-                MMHS150K (default: MMHS150K_CLIP_THRESHOLD = 0.45).
-                Has no effect on harmeme or mami processing.
+            hf_cache: HuggingFace model cache directory.
+            debug: If True, bypass all filters and mark every image as kept.
+            mmhs150k_clip_threshold: Override the CLIP meme-probability threshold
+                used for MMHS150K (default: MMHS150K_CLIP_THRESHOLD = 0.45).
+                Has no effect on harmeme or mami datasets.
         """
         self.debug = debug
         self.mmhs150k_threshold = (
@@ -124,12 +130,7 @@ class MemeImageFilter:
         ]
 
     def extract_text_ocr(self, image_path: str) -> Tuple[str, int]:
-        """
-        Extract text from image using EasyOCR.
-
-        Returns:
-            (ocr_text, char_count)
-        """
+        """Run EasyOCR on a single image; return (joined text, character count)."""
         try:
             result = self.ocr.readtext(image_path, detail=0)
             text = " ".join(result)
@@ -140,11 +141,10 @@ class MemeImageFilter:
 
     def compute_clip_scores(self, image_path: str) -> Tuple[float, float]:
         """
-        Compute CLIP similarity scores for meme and screenshot prompts.
-        Used for harmeme and mami (original binary logic, unchanged).
+        Binary CLIP classification for harmeme and mami.
 
-        Returns:
-            (meme_score, screenshot_score)
+        Scores both prompts via softmax over the 2-class logit vector;
+        returns (meme_score, screenshot_score).
         """
         try:
             image = Image.open(image_path).convert("RGB")
@@ -175,17 +175,14 @@ class MemeImageFilter:
 
     def compute_clip_scores_mmhs(self, image_path: str) -> Tuple[float, float, float, str]:
         """
-        Compute CLIP similarity scores over the MMHS150K multi-class prompts.
-        Used exclusively for mmhs150k.
+        Multi-class CLIP classification used exclusively for MMHS150K.
 
-        Returns:
-            (meme_score, screenshot_score, best_negative_score, best_negative_label)
-            where:
-              meme_score          – softmax probability of the meme prompt (index 0)
-              screenshot_score    – softmax probability of the text-screenshot
-                                    prompt (index 1); kept for CSV column compat
-              best_negative_score – highest probability among ALL 4 negative prompts
-              best_negative_label – short name of the winning negative class
+        Scores 5 prompts (1 positive meme + 4 targeted negatives) and returns:
+          meme_score          – softmax P(meme prompt), index 0.
+          screenshot_score    – softmax P(text-screenshot prompt), index 1;
+                                retained for CSV column compatibility with harmeme/mami.
+          best_negative_score – max softmax probability across all 4 negative prompts.
+          best_negative_label – short label of the winning negative class.
         """
         neg_labels = ["text_screenshot", "video_screenshot", "plain_photo", "phone_ui"]
         try:
@@ -226,24 +223,22 @@ class MemeImageFilter:
         original_label: Optional[str] = None
     ) -> dict:
         """
-        Filter a single image and return metadata.
+        Apply the two-stage OCR + CLIP filter to a single image and return a manifest row.
 
-        For harmeme / mami (original logic, unchanged):
-          1. OCR: discard if extracted text is < 10 or > 300 characters
-          2. CLIP binary: keep if meme_score > screenshot_score
+        harmeme / mami:
+          1. OCR gate: discard if char_count < 10 or char_count > 300.
+          2. Binary CLIP: keep if meme_score > screenshot_score.
 
-        For mmhs150k (stricter logic):
-          1. OCR: same as above
-          2. CLIP multi-class (5 prompts): keep only if the meme prompt has the
+        mmhs150k (stricter — Twitter images contain many non-meme content types):
+          1. OCR gate: same as above.
+          2. Multi-class CLIP (5 prompts): keep only if the meme prompt has the
              highest softmax probability among all 5 prompts AND that probability
-             is >= self.mmhs150k_threshold.
+             is >= self.mmhs150k_threshold (default 0.45).
 
-        Returns:
-            dict — base keys (all datasets):
-                image_path, dataset, original_label, ocr_text, ocr_char_count,
-                clip_meme_score, clip_screenshot_score, kept
-            extra keys (mmhs150k only):
-                clip_best_negative, clip_threshold_used
+        Returns a dict with base keys shared across all datasets
+        (image_path, dataset, original_label, ocr_text, ocr_char_count,
+        clip_meme_score, clip_screenshot_score, kept) plus two MMHS150K-only
+        diagnostic keys (clip_best_negative, clip_threshold_used).
         """
         is_mmhs = dataset.lower() == "mmhs150k"
 
@@ -265,12 +260,14 @@ class MemeImageFilter:
             result["kept"] = True
             return result
 
-        # Check if image file exists
         if not os.path.isfile(image_path):
             logger.warning(f"Image file not found: {image_path}")
             return result
 
-        # Step 1: OCR filtering (identical for all datasets)
+        # ── Stage 1: OCR gate ─────────────────────────────────────────────────
+        # Discard images whose OCR text falls outside [10, 300] characters:
+        # <10 chars indicates a blank or logo image; >300 chars indicates a dense
+        # screenshot that is unlikely to be a genuine meme overlay.
         ocr_text, char_count = self.extract_text_ocr(image_path)
         result["ocr_text"]       = ocr_text
         result["ocr_char_count"] = char_count
@@ -278,7 +275,7 @@ class MemeImageFilter:
         if char_count < 10 or char_count > 300:
             return result
 
-        # Step 2: CLIP filtering — dataset-specific
+        # ── Stage 2: CLIP gate (dataset-specific) ────────────────────────────
         if is_mmhs:
             # ── MMHS150K: multi-class, strict threshold ──────────────────────
             meme_score, screenshot_score, best_neg_score, best_neg_label = \
@@ -308,15 +305,16 @@ class MemeImageFilter:
         labels_dict: Optional[dict] = None
     ) -> Tuple[list, dict]:
         """
-        Filter all images in a directory.
+        Run the two-stage filter over all images in a directory.
 
         Args:
-            images_dir: Directory containing images
-            dataset: Dataset name (harmeme|mami|mmhs150k)
-            labels_dict: Optional dict mapping image_path to original_label
+            images_dir: Root directory to scan for .jpg/.jpeg/.png files.
+            dataset: Dataset identifier — one of harmeme, mami, mmhs150k.
+            labels_dict: Optional mapping from absolute image_path to original_label.
 
         Returns:
-            (filtered_results, summary_stats)
+            (filtered_results, summary_stats) where filtered_results is a list
+            of per-image manifest dicts and summary_stats contains aggregate counts.
         """
         images_dir = Path(images_dir)
         if not images_dir.is_dir():
@@ -340,7 +338,7 @@ class MemeImageFilter:
         failed_ocr_low  = 0
         failed_ocr_high = 0
         failed_clip     = 0
-        # MMHS150K-only sub-counters
+        # Sub-counters distinguish the two MMHS150K-specific CLIP failure modes.
         failed_clip_threshold = 0
         failed_clip_not_top   = 0
 
@@ -373,7 +371,6 @@ class MemeImageFilter:
                         else:
                             failed_clip_not_top += 1
 
-            # Print running stats every 100 images
             if (i + 1) % 100 == 0:
                 num_kept_so_far = sum(1 for r in results if r["kept"])
                 keep_rate = 100 * num_kept_so_far / len(results)
@@ -401,7 +398,7 @@ class MemeImageFilter:
 
 
 def print_summary_table(all_stats: dict):
-    """Print summary statistics table."""
+    """Render a per-dataset and aggregate filtering statistics table to stdout."""
     print("\n" + "=" * 80)
     print("FILTERING SUMMARY")
     print("=" * 80)
@@ -424,7 +421,8 @@ def print_summary_table(all_stats: dict):
     _row("Failed CLIP",              total_failed_clip)
     _row("Final Kept",               total_kept)
 
-    # Extra breakdown for MMHS150K
+    # MMHS150K adds two sub-counters that distinguish meme-score-below-threshold
+    # failures from cases where a negative class outscored the meme prompt.
     for ds, s in all_stats.items():
         if "failed_clip_threshold" in s:
             print(f"\n  MMHS150K CLIP breakdown (threshold={s.get('clip_threshold', '?')}):")
@@ -489,13 +487,12 @@ def main():
     )
     args = parser.parse_args()
 
-    # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    # Suppress noisy third-party loggers
+    # Silence verbose third-party loggers that add no diagnostic value.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
@@ -503,14 +500,14 @@ def main():
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("easyocr").setLevel(logging.WARNING)
 
-    # Suppress PyTorch pin_memory warning (fires on every EasyOCR batch on CPU)
+    # PyTorch emits a pin_memory UserWarning on every EasyOCR batch when running
+    # on CPU; suppress it to keep logs readable during CPU-only runs.
     warnings.filterwarnings(
         "ignore",
         message=".*pin_memory.*no accelerator.*",
         category=UserWarning,
     )
 
-    # Set seeds for reproducibility
     set_seeds(42)
 
     print(f"\n{'='*60}")
@@ -524,16 +521,12 @@ def main():
 
     output_path = Path(args.output_manifest)
 
-    # ------------------------------------------------------------------
-    # Resume check: skip if manifest already exists, unless --force_rerun.
-    # ------------------------------------------------------------------
+    # Resume guard: skip the expensive OCR+CLIP pass if the manifest already
+    # exists, unless the caller explicitly requests a rerun via --force_rerun.
     if output_path.exists() and not args.force_rerun:
         logger.info(f"Manifest already exists at {output_path} — skipping filtering.")
         return 0
 
-    # ------------------------------------------------------------------
-    # Full run: filter images and write manifest.
-    # ------------------------------------------------------------------
     if args.debug:
         logger.warning("DEBUG MODE ENABLED: Skipping all filters, returning all images as kept")
 
@@ -558,11 +551,11 @@ def main():
         logger.error("No images were processed")
         return 1
 
-    # Write manifest CSV
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Base fieldnames (harmeme, mami) — identical to the original script.
-    # MMHS150K gets two extra diagnostic columns.
+    # MMHS150K manifests carry two extra diagnostic columns recording which
+    # negative class outscored the meme prompt and what threshold was used;
+    # harmeme and mami manifests use only the base schema.
     base_fieldnames = [
         "image_path", "dataset", "original_label", "ocr_text", "ocr_char_count",
         "clip_meme_score", "clip_screenshot_score", "kept"

@@ -2,14 +2,21 @@
 set -e
 
 # =============================================================================
-# Plot ExplanationProxy training curves (CPU-only, fast)
+# Plot Stage 3 proxy network training curves (CPU-only, fast)
 #
-# Reads /scratch/hmr_proxy_checkpoint/training_history.json and eval_results.json
-# and saves PNG plots to /scratch/hmr_proxy_training_plots.
+# Reads training_history.json from multiseed proxy checkpoint directories and
+# saves 4 PNG plots to /scratch/plots/stage_3_training_plots:
+#   stage3_train_loss.png          — per-seed train MSE + mean±std band
+#   stage3_val_loss.png            — per-seed val MSE + mean±std band
+#   stage3_train_vs_val.png        — mean train vs mean val on same axes
+#   stage3_generalization_gap.png  — mean(val−train) with ±std band
 #
 # Usage:
-#   bash scripts/runai_plot_proxy_curves.sh <UID_NUMBER>
-#   bash scripts/runai_plot_proxy_curves.sh
+#   bash scripts/runai_plot_proxy_curves.sh <UID_NUMBER>   # home code path
+#   bash scripts/runai_plot_proxy_curves.sh                # scratch code path
+#
+# Optional:
+#   CHECKPOINT_SUFFIX=_explicit_detox bash scripts/runai_plot_proxy_curves.sh <UID>
 # =============================================================================
 
 if [ "$#" -gt 1 ]; then
@@ -24,8 +31,9 @@ USERNAME="${USER}"
 GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
-PROXY_CHECKPOINT_DIR="${PROXY_CHECKPOINT_DIR:-/scratch/hmr_proxy_checkpoint}"
-PLOT_DIR="${PLOT_DIR:-/scratch/hmr_proxy_training_plots}"
+CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-_explicit_detox}"
+STAGES_ROOT="${STAGES_ROOT:-/scratch/stages}"
+PLOT_DIR="/scratch/hateful_meme_rewriting/training_plots/stage_3_training_plots"
 
 if [ -n "$1" ]; then
     UID_NUM="$1"
@@ -37,26 +45,25 @@ else
     MODE_LABEL="scratch"
 fi
 
-SCRIPT_PATH="${CODE_ROOT}/analysis/plot_proxy_training.py"
+SCRIPT_PATH="${CODE_ROOT}/analysis/recover_training_metrics.py"
 if [ ! -f "${SCRIPT_PATH}" ]; then
-    if [ -f "${REPO_ROOT_LOCAL}/analysis/plot_proxy_training.py" ]; then
-        echo "Note: ${SCRIPT_PATH} is not visible on this node."
-        echo "      Using the shared scratch code path inside the RunAI pod: /scratch/hateful_meme_rewriting"
-        CODE_ROOT="/scratch/hateful_meme_rewriting"
-        SCRIPT_PATH="${CODE_ROOT}/analysis/plot_proxy_training.py"
+    if [ -f "${REPO_ROOT_LOCAL}/analysis/recover_training_metrics.py" ]; then
+        echo "Note: /scratch path not visible on this node; using local repo check at ${REPO_ROOT_LOCAL}."
     else
         echo "ERROR: Script not found at: ${SCRIPT_PATH}"
+        echo "Check that the repository exists at ${CODE_ROOT}."
         exit 1
     fi
 fi
 
-echo "=== Plot Proxy Training Curves ==="
-echo "  User:       ${USERNAME} (UID: ${UID_NUM})"
-echo "  Mode:       ${MODE_LABEL}"
-echo "  Code:       ${CODE_ROOT}"
-echo "  Proxy ckpt: ${PROXY_CHECKPOINT_DIR}"
-echo "  Output:     ${PLOT_DIR}"
-echo "  Image:      ${IMAGE}"
+echo "=== Plot Stage 3 Proxy Training Curves ==="
+echo "  User:        ${USERNAME} (UID: ${UID_NUM})"
+echo "  Mode:        ${MODE_LABEL}"
+echo "  Code:        ${CODE_ROOT}"
+echo "  Stages root: ${STAGES_ROOT}"
+echo "  Ckpt suffix: ${CHECKPOINT_SUFFIX}"
+echo "  Output:      ${PLOT_DIR}"
+echo "  Image:       ${IMAGE}"
 echo ""
 
 runai submit hmr-plot-proxy-curves \
@@ -72,8 +79,10 @@ runai submit hmr-plot-proxy-curves \
         export MPLCONFIGDIR=/tmp/mplconfig-${UID_NUM}
         pip install matplotlib --quiet --break-system-packages 2>/dev/null || true
         python3 ${SCRIPT_PATH} \
-            --proxy_checkpoint_dir ${PROXY_CHECKPOINT_DIR} \
-            --output_dir ${PLOT_DIR}
+            --stage stage3 \
+            --scratch_root ${STAGES_ROOT} \
+            --checkpoint_suffix=\"${CHECKPOINT_SUFFIX}\" \
+            --output_dir   ${PLOT_DIR}
     "
 
 echo ""

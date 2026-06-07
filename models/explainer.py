@@ -1,3 +1,21 @@
+"""
+explainer.py — Teacher model (LLaVA-Next) for the hateful meme detoxification pipeline.
+
+MemeExplainer wraps LLaVA-Next (llava-v1.6-mistral-7b) to produce two outputs per meme:
+  1. A structured JSON explanation identifying the target group, visual evidence, and
+     implicit multimodal meaning (explain → used as conditioning context for rewriting).
+  2. A free-text non-hateful rewrite conditioned on that explanation (teacher rewrite).
+
+Design decisions:
+  - Two-stage prompting (explain then rewrite) grounds the rewrite in explicit visual
+    evidence, reducing hallucinated justifications.
+  - Batched generation with prompt-length slicing (not attention-mask slicing) avoids
+    prompt-echo artefacts from left-padding in decoder-only models.
+  - REWRITE_RETRY_HINTS maps quality-check failure codes to targeted re-instruction
+    strings injected before the final output directive.
+  - 4-bit NF4 quantisation (optional) enables inference on 24 GB VRAM.
+"""
+
 import json
 import logging
 import torch
@@ -16,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 
 class MemeExplainer:
-    """LLaVA wrapper for generating structured hate speech explanations."""
+    """LLaVA-Next teacher: produces structured meme explanations and non-hateful rewrites."""
+
+    # ── Taxonomy & prompts ────────────────────────────────────────────────────
 
     VALID_TARGET_GROUPS = {
         "race_ethnicity",
@@ -86,6 +106,8 @@ Respond with ONLY the rewritten text.
         "symbol_heavy": "Retry instruction: use normal sentence text only, not symbols or formatting artifacts.",
     }
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
     def __init__(
         self,
         model_name: str = "llava-hf/llava-v1.6-mistral-7b-hf",
@@ -94,15 +116,7 @@ Respond with ONLY the rewritten text.
         device: Optional[str] = None,
         debug: bool = False,
     ):
-        """
-        Initialize the MemeExplainer.
-
-        Args:
-            model_name: HuggingFace model identifier
-            load_in_4bit: Whether to load model in 4-bit quantization
-            device: Device to run on ('cuda', 'cpu'). Auto-detected if None.
-            debug: Debug mode for missing images (return zeros instead of error)
-        """
+        """Defer model loading; store configuration for lazy initialisation via load_model()."""
         self.model_name = model_name
         self.load_in_4bit = load_in_4bit
         self.cache_dir = cache_dir
@@ -113,7 +127,7 @@ Respond with ONLY the rewritten text.
         logger.info(f"MemeExplainer initialized with device: {self.device}")
 
     def load_model(self) -> None:
-        """Load the LLaVA model and processor."""
+        """Load the LLaVA-Next processor and model weights, optionally with 4-bit NF4 quantisation."""
         logger.info(f"Loading model {self.model_name}...")
 
         self.processor = LlavaNextProcessor.from_pretrained(
@@ -145,19 +159,10 @@ Respond with ONLY the rewritten text.
 
         logger.info("Model loaded successfully")
 
+    # ── Internal utilities ────────────────────────────────────────────────────
+
     def _load_image(self, image_path: str) -> Any:
-        """
-        Load image from path with debug fallback.
-
-        Args:
-            image_path: Path to image file
-
-        Returns:
-            PIL Image object
-
-        Raises:
-            FileNotFoundError: In production mode if file doesn't exist
-        """
+        """Load a PIL RGB image; in debug mode return a black 336×336 placeholder rather than raising."""
         path = Path(image_path)
         if not path.exists():
             if self.debug:
@@ -215,15 +220,7 @@ Respond with ONLY the rewritten text.
         return responses
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
-        """
-        Parse JSON response from model with fallback.
-
-        Args:
-            response: Raw model output string
-
-        Returns:
-            Parsed dictionary or null-dict with parse_error=True
-        """
+        """Extract the last balanced JSON object from a raw model response, with graceful fallback."""
         raw = (response or "").strip()
 
         # LLaVA can still wrap JSON in markdown fences despite prompt constraints.
@@ -273,8 +270,11 @@ Respond with ONLY the rewritten text.
                 "raw_output": response,
             }
 
+    # ── Normalisation helpers ─────────────────────────────────────────────────
+
     @staticmethod
     def _is_null_like(value: Any) -> bool:
+        """Return True for None, empty strings, and sentinel strings the model emits for missing fields."""
         if value is None:
             return True
         if isinstance(value, str):
@@ -290,6 +290,7 @@ Respond with ONLY the rewritten text.
         return False
 
     def _normalize_target_group(self, value: Any) -> Optional[str]:
+        """Map a raw model-produced target group string to a canonical VALID_TARGET_GROUPS key."""
         if self._is_null_like(value) or not isinstance(value, str):
             return None
 
@@ -314,12 +315,14 @@ Respond with ONLY the rewritten text.
         return None
 
     def _normalize_implicit_meaning(self, value: Any) -> Optional[str]:
+        """Collapse whitespace and reject null-like values for implicit_meaning."""
         if self._is_null_like(value) or not isinstance(value, str):
             return None
         cleaned = " ".join(value.strip().split())
         return cleaned if cleaned else None
 
     def _normalize_visual_evidence(self, value: Any) -> Optional[str]:
+        """Collapse whitespace and reject null-like values for visual_evidence."""
         if self._is_null_like(value) or not isinstance(value, str):
             return None
         cleaned = " ".join(value.strip().split())
@@ -327,6 +330,7 @@ Respond with ONLY the rewritten text.
 
     @staticmethod
     def _is_complete_explanation(explanation: Dict[str, Any]) -> bool:
+        """Return True only if all three required explanation fields are non-empty after normalisation."""
         return bool(
             explanation.get("target_group")
             and explanation.get("visual_evidence")
@@ -337,6 +341,7 @@ Respond with ONLY the rewritten text.
         self,
         explanation: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """Apply field-level normalisation to a raw parsed explanation dict, preserving error metadata."""
         src = explanation if isinstance(explanation, dict) else {}
         normalized = {
             "target_group": self._normalize_target_group(src.get("target_group")),
@@ -350,6 +355,8 @@ Respond with ONLY the rewritten text.
             normalized["raw_output"] = src["raw_output"]
         return normalized
 
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def explain(
         self,
         image_path: str,
@@ -357,15 +364,10 @@ Respond with ONLY the rewritten text.
         max_retries: int = 1,
     ) -> Dict[str, Any]:
         """
-        Generate structured hate speech explanation for a meme.
+        Generate a structured hate speech explanation for a single meme.
 
-        Args:
-            image_path: Path to meme image
-            text: Text content of the meme
-
-        Returns:
-            Dictionary with target_group, visual_evidence, implicit_meaning,
-            and parse_error flag if JSON parsing failed
+        Retries up to max_retries times when the response is incomplete; returns the
+        best partial result rather than raising on exhaustion.
         """
         if self.model is None:
             self.load_model()
@@ -418,17 +420,7 @@ Respond with ONLY the rewritten text.
         text: str,
         explanation: Dict[str, Any],
     ) -> str:
-        """
-        Generate a non-hateful rewrite of meme text using explanation.
-
-        Args:
-            image_path: Path to meme image
-            text: Original meme text
-            explanation: Dictionary with target_group, visual_evidence, implicit_meaning
-
-        Returns:
-            Rewritten text string
-        """
+        """Generate a non-hateful rewrite of a single meme text conditioned on the structured explanation."""
         if self.model is None:
             self.load_model()
 
@@ -476,14 +468,10 @@ Respond with ONLY the rewritten text.
         max_retries: int = 1,
     ) -> List[Dict[str, Any]]:
         """
-        Generate explanations for a batch of memes.
+        Generate structured explanations for a batch of memes.
 
-        Args:
-            image_paths: List of paths to meme images
-            texts: List of meme texts
-
-        Returns:
-            List of explanation dictionaries
+        Attempts batched generation for throughput; falls back to serial on OOM or
+        processor errors, and retries incomplete explanations up to max_retries times.
         """
         if len(image_paths) != len(texts):
             raise ValueError(
@@ -613,15 +601,9 @@ Respond with ONLY the rewritten text.
         explanations: List[Dict[str, Any]],
     ) -> List[str]:
         """
-        Generate rewrites for a batch of memes.
+        Generate non-hateful rewrites for a batch of memes in a single batched call.
 
-        Args:
-            image_paths: List of paths to meme images
-            texts: List of original meme texts
-            explanations: List of explanation dictionaries
-
-        Returns:
-            List of rewritten texts
+        Falls back to serial generation per example if the batched call raises an exception.
         """
         if not (len(image_paths) == len(texts) == len(explanations)):
             raise ValueError(
@@ -708,6 +690,7 @@ Respond with ONLY the rewritten text.
         implicit_meaning: str,
         feedback_reason: Optional[str] = None,
     ) -> str:
+        """Render REWRITE_PROMPT; if feedback_reason maps to a retry hint, inject it before the output directive."""
         prompt = self.REWRITE_PROMPT.format(
             text=text,
             target_group=target_group,
@@ -734,11 +717,11 @@ Respond with ONLY the rewritten text.
         top_p: float = 0.92,
     ) -> List[List[str]]:
         """
-        Generate multiple rewrite candidates per example.
+        Generate candidates_per_example diverse rewrite candidates per meme via nucleus sampling.
 
-        The generation call expands the batch by repeating each prompt/image pair,
-        which keeps the output mapping simple while still allowing sampling to
-        produce diverse candidates.
+        Each prompt/image pair is replicated candidates_per_example times in the batch so that
+        a single generation call yields all candidates; the cursor-based reassembly then groups
+        them back by source example.
         """
         if not (len(image_paths) == len(texts) == len(explanations)):
             raise ValueError(

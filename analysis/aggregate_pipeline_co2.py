@@ -1,17 +1,21 @@
 """
-Aggregate CodeCarbon emission records across all pipeline stages and
-estimate CO2 for stages without direct tracking (training, Stage 0).
+Aggregate CodeCarbon emission records across all pipeline stages.
 
-What is counted:
-  Stage 0  — OCR + CLIP filtering (ESTIMATED from manifest sizes × assumed rate;
-             CodeCarbon tracked from next run onward via emissions_stage0_*.csv)
-  Stage 1A — LLaVA-Next explanations (8 shards, CodeCarbon tracked)
+Stages lacking direct CodeCarbon coverage (Stage 0, Stage 2 training) are
+estimated analytically; all other stages use measured CSV files.
+
+Stage accounting:
+  Stage 0  — OCR + CLIP filtering   ESTIMATED: manifest row count × assumed rate.
+             Future runs emit emissions_stage0_*.csv and are used when present.
+  Stage 1A — LLaVA-Next explanations  (8 shards, CodeCarbon tracked)
   Stage 1B — LLaVA-Next pseudo-rewrites (8 shards, CodeCarbon tracked)
-  Stage 2  — BART LoRA training (4 conditions, ESTIMATED from duration × GPU power)
+  Stage 2  — BART LoRA training  ESTIMATED: duration × GPU power when no CSV found.
   Stage 3  — BART-base inference (4 conditions, CodeCarbon tracked)
   Stage 3  — BART-finetuned inference (4 conditions, CodeCarbon tracked)
   Proxy    — Proxy inference (optional, CodeCarbon tracked)
   DetoxLLM — DetoxLLM baseline (optional, CodeCarbon tracked)
+
+Outputs: pipeline_co2_summary.json, pipeline_co2_summary.tsv
 
 Usage:
     python analysis/aggregate_pipeline_co2.py \\
@@ -32,34 +36,29 @@ import numpy as np
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-# Assumed GPU power (W) during BART training on A100-SXM4-40GB.
-# Based on: A100 TDP = 400 W; seq2seq training with batch=8 typically runs at
-# 60-70% TDP, i.e. ~240-280 W.  We use 270 W as a conservative midpoint.
-# This value is only used where CodeCarbon data is absent.
+# A100 TDP = 400 W; seq2seq training at batch=8 typically reaches 60-70% TDP
+# (~240-280 W). 270 W is a conservative midpoint used only when no CSV is found.
 GPU_POWER_TRAINING_W = 270.0
 
-# Stage 0 estimation parameters.
-# EasyOCR on A100: ~0.30 s/image (dominant cost; CLIP adds ~0.03 s/image).
-# GPU power: lighter than LLaVA but heavier than BART eval → ~150 W.
-# Three datasets run as separate parallel jobs; energy is summed across jobs.
+# EasyOCR dominates at ~0.30 s/image; CLIP adds ~0.03 s/image → 0.33 s total.
+# GPU load is lighter than LLaVA inference but heavier than BART eval → ~150 W.
+# The three datasets ran as independent parallel jobs; energy is summed.
 STAGE0_SEC_PER_IMAGE = 0.33
 GPU_POWER_STAGE0_W = 150.0
 
-# Dataset manifest paths relative to scratch_dir.
 STAGE0_MANIFEST_GLOBS = [
     "hmr_data/harmeme/manifest.csv",
     "hmr_data/mami/manifest.csv",
     "hmr_data/mmhs150k/manifest.csv",
 ]
-# Future runs will emit per-dataset CSVs here.
+# Future filter_meme_images.py runs emit per-dataset CSVs here.
 STAGE0_EMISSIONS_GLOBS = [
     "hmr_data/harmeme/emissions_stage0_harmeme.csv",
     "hmr_data/mami/emissions_stage0_mami.csv",
     "hmr_data/mmhs150k/emissions_stage0_mmhs150k.csv",
 ]
 
-# Stage definitions: (label, description, dir_globs, is_sharded, is_estimated)
-# Each entry: (stage_id, description, list of Path globs relative to scratch_dir)
+# Each entry: (stage_id, description, list of Path globs relative to scratch_dir, _unused_flag)
 STAGE_DEFS = [
     (
         "stage1a_llava_explanations",
@@ -113,18 +112,18 @@ TRAINING_STAGE_DEF = (
     "stage2_bart_training",
     "BART LoRA training (4 conditions)",
     [
-        "hmr_stage2_phase2_full_checkpoint/training_history.json",
-        "hmr_stage2_phase2_target_only_checkpoint/training_history.json",
-        "hmr_stage2_phase2_visual_only_checkpoint/training_history.json",
-        "hmr_stage2_phase2_none_checkpoint/training_history.json",
+        "hmr_stage2_full_checkpoint/training_history.json",
+        "hmr_stage2_target_only_checkpoint/training_history.json",
+        "hmr_stage2_visual_only_checkpoint/training_history.json",
+        "hmr_stage2_none_checkpoint/training_history.json",
     ],
 )
 
 TRAINING_EMISSIONS_GLOBS = [
-    "hmr_stage2_phase2_full_checkpoint/emissions.csv",
-    "hmr_stage2_phase2_target_only_checkpoint/emissions.csv",
-    "hmr_stage2_phase2_visual_only_checkpoint/emissions.csv",
-    "hmr_stage2_phase2_none_checkpoint/emissions.csv",
+    "hmr_stage2_full_checkpoint/emissions.csv",
+    "hmr_stage2_target_only_checkpoint/emissions.csv",
+    "hmr_stage2_visual_only_checkpoint/emissions.csv",
+    "hmr_stage2_none_checkpoint/emissions.csv",
 ]
 
 
@@ -141,7 +140,7 @@ def read_emissions_csv(path: Path) -> List[Dict]:
 
 
 def aggregate_csv_rows(rows: List[Dict]) -> Dict:
-    """Sum duration, energy and emissions across multiple CSV rows."""
+    """Sum duration, energy, and CO2 across CodeCarbon CSV rows; average GPU power."""
     total_duration = 0.0
     total_energy = 0.0
     total_co2 = 0.0
@@ -168,7 +167,10 @@ def aggregate_csv_rows(rows: List[Dict]) -> Dict:
 
 
 def derive_carbon_intensity(all_rows: List[Dict]) -> Optional[float]:
-    """Derive kg CO2/kWh from existing measurements."""
+    """Derive carbon intensity (kg CO2/kWh) as median over all tracked measurements.
+
+    Median is used to resist outliers from transient grid-mix changes during long jobs.
+    """
     intensities = []
     for row in all_rows:
         try:
@@ -195,7 +197,7 @@ def estimate_training_co2(
     carbon_intensity: float,
     gpu_power_w: float,
 ) -> Dict:
-    """Return training CO2 from emissions CSVs (preferred) or training_history.json estimate."""
+    """Return Stage 2 training CO2 from emissions CSVs (preferred) or duration × power fallback."""
     stage_id, description, history_globs = TRAINING_STAGE_DEF
 
     # ── Path 1: emissions CSVs exist (preferred) ──────────────────────────
@@ -236,7 +238,7 @@ def estimate_training_co2(
     for glob in history_globs:
         history_path = scratch_dir / glob
         if not history_path.exists():
-            cond = history_path.parent.name.replace("hmr_stage2_phase2_", "").replace("_checkpoint", "")
+            cond = history_path.parent.name.replace("hmr_stage2_", "").replace("_checkpoint", "")
             logger.warning("training_history.json not found: %s", history_path)
             conditions[cond] = None
             continue
@@ -522,7 +524,8 @@ def main() -> int:
 
     logger.info("Scanning emissions CSVs under %s", args.scratch_dir)
 
-    # Collect all rows for carbon intensity derivation
+    # Pool all tracked rows to derive a robust carbon-intensity estimate
+    # before processing individual stages.
     all_rows_global: List[Dict] = []
     for _, _, globs, _ in STAGE_DEFS:
         for glob in globs:
@@ -539,7 +542,7 @@ def main() -> int:
         logger.error("Could not derive carbon intensity — no valid emissions CSVs found.")
         return 1
 
-    # Build per-stage summaries
+    # ── Per-stage summaries ───────────────────────────────────────────────
     stage_summaries = []
     for stage_id, description, globs, _ in STAGE_DEFS:
         summary = build_stage_summary(stage_id, description, globs, args.scratch_dir)
@@ -554,18 +557,16 @@ def main() -> int:
         else:
             logger.info("%-40s  (no data found)", description)
 
-    # Prepend Stage 0 estimate
     stage0_summary = estimate_stage0_co2(args.scratch_dir, carbon_intensity)
     stage_summaries.insert(0, stage0_summary)
 
-    # Insert training estimate after Stage 1B (now at indices 1, 2 after stage0)
     training_summary = estimate_training_co2(
         args.scratch_dir, carbon_intensity, args.gpu_power_training_w
     )
-    # Insert at position 3 (after stage0, stage1a, stage1b)
+    # Position 3 preserves chronological order: stage0, stage1a, stage1b, stage2, …
     stage_summaries.insert(3, training_summary)
 
-    # Compute totals (exclude optional stages with no data from primary total)
+    # Exclude optional stages that produced no data from the headline total.
     primary_stages = [
         s for s in stage_summaries
         if not (s["stage"] in ("proxy_inference", "detoxllm_inference") and not s.get("found"))
@@ -596,7 +597,7 @@ def main() -> int:
     out_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
     logger.info("Full JSON written to %s", out_json)
 
-    # TSV table
+    # ── TSV for spreadsheet ingestion ────────────────────────────────────
     tsv_lines = ["stage\tdescription\tduration_s\tenergy_kwh\tco2_kg\testimated\tnote"]
     for s in stage_summaries:
         tsv_lines.append("\t".join([

@@ -2,10 +2,10 @@
 set -e
 
 # =============================================================================
-# Plot training curves from Stage 2 checkpoints (CPU-only, fast)
+# Plot Stage 2 training curves from BART LoRA checkpoints (CPU-only, fast)
 #
 # Reads trainer_state.json / training_history.json from all Stage 2 checkpoint
-# directories on scratch and saves PNG/PDF/SVG plots to /scratch/hmr_training_plots.
+# directories on scratch and saves PNG plots to /scratch/plots/stage_2_training_plots.
 #
 # Run this AFTER any Stage 2 training completes.  Works even on runs that
 # predate training_history.json — it falls back to trainer_state.json inside
@@ -15,13 +15,10 @@ set -e
 #   bash scripts/runai_plot_curves.sh <UID_NUMBER>   # home code path
 #   bash scripts/runai_plot_curves.sh                # scratch code path
 #
-# Example:
-#   bash scripts/runai_plot_curves.sh 123456
-#
 # Optional experiment switches:
-#   CHECKPOINT_SUFFIX=_explicit_detox PLOT_SUFFIX=_explicit_detox bash scripts/runai_plot_curves.sh <UID>
-#     reads /scratch/hmr_stage2_phase2_<condition>_explicit_detox_checkpoint
-#     writes /scratch/hmr_training_plots_explicit_detox
+#   CHECKPOINT_SUFFIX=_explicit_detox bash scripts/runai_plot_curves.sh <UID>
+#     reads /scratch/stages/hmr_stage2_phase2_<condition>_explicit_detox_checkpoint
+#     writes /scratch/plots/stage_2_training_plots
 # =============================================================================
 
 if [ "$#" -gt 1 ]; then
@@ -37,10 +34,9 @@ GROUP_NUM="31"
 IMAGE="registry.rcp.epfl.ch/ee-559-garzone/hmr:v0.1"
 REPO_ROOT_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 CHECKPOINT_SUFFIX="${CHECKPOINT_SUFFIX:-_explicit_detox}"
-PLOT_SUFFIX="${PLOT_SUFFIX:-_explicit_detox}"
-JOB_SUFFIX="${PLOT_SUFFIX//_/-}"
+JOB_SUFFIX="${CHECKPOINT_SUFFIX//_/-}"
 STAGES_ROOT="${STAGES_ROOT:-/scratch/stages}"
-PLOT_DIR="/scratch/plots/hmr_training_plots${PLOT_SUFFIX}"
+PLOT_DIR="/scratch/hateful_meme_rewriting/training_plots/stage_2_training_plots"
 
 # --- Path/UID mode selection ---
 if [ -n "$1" ]; then
@@ -70,7 +66,6 @@ echo "  Mode:  ${MODE_LABEL}"
 echo "  Code:  ${CODE_ROOT}"
 echo "  Image: ${IMAGE}"
 echo "  Ckpt suffix: ${CHECKPOINT_SUFFIX}"
-echo "  Plot suffix: ${PLOT_SUFFIX}"
 echo "  Output: ${PLOT_DIR}"
 echo ""
 
@@ -87,6 +82,7 @@ runai submit hmr-plot-curves${JOB_SUFFIX} \
         export MPLCONFIGDIR=/tmp/mplconfig-${UID_NUM}
         pip install matplotlib --quiet --break-system-packages 2>/dev/null || true
         python3 ${SCRIPT_PATH} \
+            --stage stage2 \
             --scratch_root ${STAGES_ROOT} \
             --checkpoint_suffix=\"${CHECKPOINT_SUFFIX}\" \
             --output_dir   ${PLOT_DIR}
@@ -98,7 +94,7 @@ echo "  runai logs hmr-plot-curves${JOB_SUFFIX} --follow"
 echo ""
 echo "Once done, copy plots to your local machine with:"
 echo "  # From a NEW terminal on your laptop (not inside the cluster):"
-echo "  kubectl cp <POD_NAME>:${PLOT_DIR} ./hmr_training_plots${PLOT_SUFFIX}"
+echo "  kubectl cp <POD_NAME>:${PLOT_DIR} ./training_plots/stage_2_training_plots"
 echo ""
 echo "Or submit a second job to list the generated files:"
 echo "  runai submit hmr-list-plots \\"

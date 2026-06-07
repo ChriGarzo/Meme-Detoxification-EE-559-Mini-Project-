@@ -51,7 +51,6 @@ DATASET_DIR="${DATASET_DIR:-${STAGES_ROOT}/hmr_stage2_dataset}"
 STAGE1_OUTPUT_DIR="${STAGE1_OUTPUT_DIR:-${STAGES_ROOT}/hmr_stage1_output}"
 VALIDATION_JSONL="${VALIDATION_JSONL:-${DATASET_DIR}/test.jsonl}"
 BASE_MODEL="${BASE_MODEL:-facebook/bart-large}"
-PHASE1_CHECKPOINT_DIR="${PHASE1_CHECKPOINT_DIR:-}"
 
 NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-5}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-8}"
@@ -77,7 +76,6 @@ INCLUDE_DETOXLLM="${INCLUDE_DETOXLLM:-0}"
 BASELINE_SEED="${BASELINE_SEED:-42}"
 SKIP_PROXY="${SKIP_PROXY:-0}"
 SKIP_CLIPSCORE="${SKIP_CLIPSCORE:-0}"
-SKIP_VISUALBERT="${SKIP_VISUALBERT:-0}"
 RUN_EVAL_AFTER_TRAINING="${RUN_EVAL_AFTER_TRAINING:-0}"
 DEBUG="${DEBUG:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -177,9 +175,6 @@ TRAIN_ARGS=(
     --lora_alpha "${LORA_ALPHA}"
     --lora_dropout "${LORA_DROPOUT}"
 )
-if [ -n "${PHASE1_CHECKPOINT_DIR}" ]; then
-    TRAIN_ARGS+=(--phase1_checkpoint_dir "${PHASE1_CHECKPOINT_DIR}")
-fi
 
 PROXY_ARGS=(
     --proxy_num_train_epochs "${PROXY_NUM_TRAIN_EPOCHS}"
@@ -212,9 +207,6 @@ if [ "${INCLUDE_DETOXLLM}" = "1" ]; then
 fi
 if [ "${SKIP_CLIPSCORE}" = "1" ]; then
     EVAL_ARGS+=(--skip_clipscore)
-fi
-if [ "${SKIP_VISUALBERT}" = "1" ]; then
-    EVAL_ARGS+=(--skip_visualbert)
 fi
 
 print_header() {

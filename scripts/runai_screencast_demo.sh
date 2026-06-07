@@ -30,7 +30,7 @@ STAGES_ROOT="/scratch/stages"
 OUTPUT_DIR="/scratch/eval_results/screencast_demo${EVAL_SUFFIX}"
 
 INPUT_JSONL="${STAGES_ROOT}/hmr_stage2_dataset/test.jsonl"
-BART_CHECKPOINT="${STAGES_ROOT}/hmr_stage2_phase2_full_explicit_detox_checkpoint"
+BART_CHECKPOINT="${STAGES_ROOT}/hmr_stage2_full_explicit_detox_checkpoint"
 PROXY_CHECKPOINT="${STAGES_ROOT}/hmr_proxy_checkpoint_explicit_detox/best_proxy.pt"
 
 JOB_NAME="hmr-screencast-demo"

@@ -1,9 +1,19 @@
 """
-Merge Stage 1 sharded pseudo-rewrite JSONL files into a single deduplicated file.
+Stage 1 post-processing: merge per-shard pseudo-rewrite JSONL files into a single
+deduplicated output.
+
+Pipeline position: AFTER all run_stage1_sharded.py shards have completed;
+BEFORE build_stage2_dataset.py.
+
+Inputs : <input_dir>/<dataset>_pseudo_rewrites_shard*of<N>.jsonl
+Outputs: <output_path>  (default: <input_dir>/<dataset>_pseudo_rewrites_merged.jsonl)
+
+Deduplication key priority: id > (image_path, original_text) > pseudo_rewrite.
+First occurrence wins for deterministic output ordering.
 
 Example:
-  python inference/merge_stage1_rewrites_shards.py \
-    --dataset train \
+  python inference/merge_stage1_rewrites_shards.py \\
+    --dataset train \\
     --input_dir /scratch/hmr_stage1_output
 """
 
@@ -27,6 +37,7 @@ def _normalize_image_key(path: str) -> str:
 
 
 def _record_key(record: Dict) -> str:
+    """Compute a deduplication key with fallback: id > (image, text) > rewrite."""
     rid = str(record.get("id", "")).strip()
     if rid:
         return f"id::{rid}"
@@ -36,7 +47,7 @@ def _record_key(record: Dict) -> str:
     if image_key or orig:
         return f"imgtxt::{image_key}::{orig}"
 
-    # Last-resort key from rewrite content.
+    # Last-resort: key on rewrite content alone (should be rare).
     rewrite = _normalize_text(str(record.get("pseudo_rewrite", "")))
     return f"rw::{rewrite}" if rewrite else ""
 
@@ -47,6 +58,7 @@ def merge_shards(
     output_path: str,
     num_shards: int,
 ) -> Tuple[int, int, int, int, List[str]]:
+    """Merge and deduplicate all shard JSONL files for a given dataset prefix."""
     pattern = os.path.join(
         input_dir,
         f"{dataset}_pseudo_rewrites_shard*of{num_shards:02d}.jsonl",
@@ -86,12 +98,14 @@ def merge_shards(
 
                 if key in by_key:
                     duplicate_rows += 1
-                    # Keep first occurrence for deterministic behavior.
+                    # First occurrence wins: file order is sorted, so lower
+                    # shard IDs take priority when the same example appears twice.
                     continue
 
                 by_key[key] = obj
                 kept_rows += 1
 
+    # Sort by key for stable output ordering across runs.
     merged_rows = [by_key[k] for k in sorted(by_key.keys())]
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

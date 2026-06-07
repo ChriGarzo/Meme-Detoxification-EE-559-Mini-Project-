@@ -1,5 +1,14 @@
 """
-DetoxLLM baseline: text-only detoxification without images.
+DetoxLLM text-only baseline for hateful meme detoxification.
+
+Uses UBC-NLP/DetoxLLM-7B, a 7B causal language model instruction-tuned for
+text detoxification, to rewrite meme text without any visual context.  This
+baseline isolates the contribution of multimodal grounding in the full pipeline:
+if DetoxLLM performs comparably to our BART system, the image-based conditioning
+is not adding significant signal.
+
+Reads the Stage 2 validation JSONL produced by build_stage2_dataset.py so
+evaluation is performed on the same held-out examples as all other systems.
 """
 import argparse
 import json
@@ -23,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(debug: bool = False):
-    """Setup logging configuration."""
+    """Configure root logger level; DEBUG when debug=True."""
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         level=level,
@@ -32,7 +41,7 @@ def setup_logging(debug: bool = False):
 
 
 class DetoxLLMBaseline:
-    """DetoxLLM baseline for hateful meme text rewriting (text-only)."""
+    """Text-only detoxification baseline using UBC-NLP/DetoxLLM-7B."""
 
     def __init__(
         self,
@@ -42,13 +51,13 @@ class DetoxLLMBaseline:
         debug: bool = False
     ):
         """
-        Initialize DetoxLLM baseline.
+        Load DetoxLLM-7B in float16 (or 4-bit via bitsandbytes if load_in_4bit=True).
 
         Args:
-            model_name: Model identifier
-            hf_cache: Hugging Face cache directory
-            load_in_4bit: Load model in 4-bit quantization
-            debug: Debug mode (skip actual model loading)
+            model_name: HuggingFace model identifier.
+            hf_cache: HuggingFace model cache directory.
+            load_in_4bit: Enable bitsandbytes NF4 quantisation for reduced GPU memory.
+            debug: Skip model loading and return dummy rewrites (for CI/smoke tests).
         """
         self.model_name = model_name
         self.hf_cache = hf_cache
@@ -59,7 +68,6 @@ class DetoxLLMBaseline:
             import os
             os.environ["HF_HOME"] = hf_cache
 
-        # Only load model if not in debug mode
         if not debug:
             logger.info(f"Loading {model_name}...")
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=hf_cache)
@@ -102,23 +110,18 @@ class DetoxLLMBaseline:
 
     def detoxify(self, text: str) -> str:
         """
-        Detoxify a single text using DetoxLLM.
+        Run DetoxLLM on a single text; return detoxified output.
 
-        Args:
-            text: Original meme text
-
-        Returns:
-            Detoxified text
+        The prompt format "detoxify: <text>\\noutput: " follows the instruction
+        template from the DetoxLLM paper. Generation falls back to the original
+        text if the output is shorter than 2 tokens or an exception occurs.
         """
         if self.debug:
-            # Debug mode: return dummy rewrite
             return f"safe: {text}"
 
         try:
-            # Prepare input prompt
             prompt = f"detoxify: {text}\noutput: "
 
-            # Tokenize
             inputs = self.tokenizer(
                 prompt,
                 return_tensors="pt",
@@ -127,7 +130,6 @@ class DetoxLLMBaseline:
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            # Generate
             input_len = inputs["input_ids"].shape[1]
             with torch.no_grad():
                 outputs = self.model.generate(
@@ -139,18 +141,17 @@ class DetoxLLMBaseline:
                     pad_token_id=self.tokenizer.eos_token_id
                 )
 
-            # Decode
             generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-            # Extract generated portion (after "output: ")
+            # Extract the generated suffix after the "output:" sentinel.
             if "output:" in generated_text:
                 rewrite = generated_text.split("output:")[-1].strip()
             else:
                 rewrite = generated_text.replace(prompt, "").strip()
 
-            # Clean up common artifacts
+            # Fall back to the original when generation produces fewer than 2 tokens.
             if not rewrite or len(rewrite.split()) < 2:
-                rewrite = text  # Fallback to original if generation failed
+                rewrite = text
 
             return rewrite
 
@@ -160,13 +161,8 @@ class DetoxLLMBaseline:
 
     def process_records(self, records: List[Dict]) -> List[Dict]:
         """
-        Detoxify a list of validation records.
-
-        Args:
-            records: List of records with at least 'id', 'original_text', 'image_path' keys.
-
-        Returns:
-            List of output records with 'id', 'system', 'original_text', 'rewrite', 'image_path'.
+        Detoxify a list of validation records; return output records with
+        id, system, original_text, rewrite, image_path.
         """
         results = []
         for rec in tqdm(records, desc="Detoxifying"):
@@ -183,7 +179,7 @@ class DetoxLLMBaseline:
 
 
 def load_validation_jsonl(path: Path) -> List[Dict]:
-    """Load records from the Stage 2 validation JSONL."""
+    """Parse the Stage 2 validation JSONL; return a list of record dicts."""
     records: List[Dict] = []
     if not path.exists():
         logger.warning(f"Validation JSONL not found: {path}")

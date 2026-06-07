@@ -2,9 +2,8 @@
 set -e
 
 # =============================================================================
-# Stage 1 (multimodal + sharded):
+# Stage 1 (sharded):
 #   LLaVA explanation generation + pseudo-rewrites
-#   + VisualBERT-style multimodal hatefulness scoring
 #
 # Usage:
 #   SHARD_ID=0 NUM_SHARDS=8 bash scripts/runai_stage1_sharded.sh <UID_NUMBER>
@@ -38,8 +37,6 @@ SCORE_BATCH_SIZE="${SCORE_BATCH_SIZE:-8}"
 NUM_SHARDS="${NUM_SHARDS:-8}"
 SHARD_ID="${SHARD_ID:-0}"
 SPLIT="${SPLIT:-train}"
-MULTIMODAL_MODEL_NAME="${MULTIMODAL_MODEL_NAME:-chiragmittal92/visualbert-hateful-memes-finetuned-model}"
-
 if [ "${NUM_SHARDS}" -lt 1 ]; then
     echo "ERROR: NUM_SHARDS must be >= 1 (got ${NUM_SHARDS})"
     exit 1
@@ -90,8 +87,7 @@ echo "  Input:    /scratch/hmr_data/unified_splits/unified_${SPLIT}.csv (hateful
 echo "  Image:    ${IMAGE}"
 echo "  Job:      ${JOB_NAME}"
 echo "  Shard:    ${SHARD_ID}/${NUM_SHARDS}"
-echo "  Batch:    ${STAGE1_BATCH_SIZE} (generation), ${SCORE_BATCH_SIZE} (multimodal scorer)"
-echo "  MM model: ${MULTIMODAL_MODEL_NAME}"
+echo "  Batch:    ${STAGE1_BATCH_SIZE} (generation)"
 echo ""
 
 runai submit "${JOB_NAME}" \
@@ -111,9 +107,7 @@ runai submit "${JOB_NAME}" \
         --images_dir /scratch/hmr_data \
         --output_dir /scratch/hmr_stage1_output \
         --hf_cache /scratch/hf_cache \
-        --multimodal_model_name "${MULTIMODAL_MODEL_NAME}" \
         --batch_size ${STAGE1_BATCH_SIZE} \
-        --score_batch_size ${SCORE_BATCH_SIZE} \
         --num_shards ${NUM_SHARDS} \
         --shard_id ${SHARD_ID} \
         --load_in_4bit \

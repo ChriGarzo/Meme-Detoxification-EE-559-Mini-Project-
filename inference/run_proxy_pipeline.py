@@ -1,11 +1,19 @@
 """
-Proxy + BART inference for VLM-free meme rewriting.
+Proxy pipeline inference: VLM-free meme rewriting via CLIP + ExplanationProxy + BART.
 
-This runs the intended deployment-style sequence:
-  image + original text -> CLIP features -> ExplanationProxy soft tokens
-  + BART none-prompt encoder states -> BART full-condition decoder -> rewrite
+Pipeline position: AFTER train_proxy.py; used as the deployment-mode counterpart
+to run_stage2.py (full condition).
 
-The JSONL output is intentionally compatible with evaluation/evaluate.py.
+Inputs : --input_jsonl  Stage 2 val/test JSONL with image_path and original_text.
+Outputs: <output_dir>/stage2_rewrites_clip_proxy_bart_full.jsonl
+         (format compatible with evaluation/evaluate.py)
+
+Inference sequence per batch:
+  1. CLIP: image + original_text  ->  [B, 1536] joint embedding
+  2. ExplanationProxy MLP:         ->  [B, num_soft_tokens, hidden_size]
+  3. BART text encoder (none-condition prompt):  ->  [B, T, hidden_size]
+  4. Concatenate proxy tokens + text encoder states along sequence dimension.
+  5. BART decoder beam search -> rewrite strings.
 """
 
 import argparse
@@ -53,6 +61,7 @@ def setup_logging(output_dir: Path, debug: bool = False) -> None:
 
 
 def load_stage2_jsonl(path: Path, max_examples: Optional[int]) -> List[Dict[str, Any]]:
+    """Load Stage 2 val/test JSONL; skip rows without both original_text and image_path."""
     examples: List[Dict[str, Any]] = []
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line_num, line in enumerate(f, 1):
@@ -85,13 +94,21 @@ def load_stage2_jsonl(path: Path, max_examples: Optional[int]) -> List[Dict[str,
 
 
 def write_jsonl_batch(records: List[Dict[str, Any]], output_path: Path) -> None:
+    """Append a batch of output records to a JSONL file."""
     with output_path.open("a", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 class ProxyBartPipeline:
-    """Inference wrapper for proxy soft tokens plus BART text encoder states."""
+    """
+    Batched inference wrapper: CLIP -> ExplanationProxy soft tokens + BART encoder -> decoder.
+
+    text_prompt_format selects which none-condition prompt is prepended to the
+    BART text encoder path (none_legacy: bracket format; none_explicit_detox:
+    natural-language format).  Both were trained alongside the proxy; the choice
+    must match the format used during proxy training.
+    """
 
     def __init__(
         self,
@@ -117,6 +134,7 @@ class ProxyBartPipeline:
         self.bart.eval()
 
         hidden_size = int(self.bart.config.d_model)
+        # Read num_soft_tokens from proxy_config.json if not overridden via CLI.
         proxy_config_path = Path(proxy_checkpoint).parent / "proxy_config.json"
         if num_soft_tokens is None and proxy_config_path.exists():
             try:
@@ -136,6 +154,7 @@ class ProxyBartPipeline:
         self.proxy.eval()
 
     def _build_text_prompts(self, texts: List[str]) -> List[str]:
+        """Construct the none-condition BART encoder prompt for each original text."""
         if self.text_prompt_format == "none_explicit_detox":
             return [
                 "Task: rewrite the original meme text to be non-toxic while preserving "
@@ -148,6 +167,7 @@ class ProxyBartPipeline:
         return [f"[T: null] [V: null] [M: null] | {text}" for text in texts]
 
     def _encode_text_prompts(self, texts: List[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode none-condition prompts through the BART encoder; return (hidden_state, mask)."""
         prompts = self._build_text_prompts(texts)
         inputs = self.tokenizer(
             prompts,
@@ -166,6 +186,7 @@ class ProxyBartPipeline:
         return encoder_outputs.last_hidden_state, inputs["attention_mask"]
 
     def _clip_features(self, image_paths: List[str], texts: List[str]) -> torch.Tensor:
+        """Extract CLIP joint embedding [B, 1536] = image_embed ‖ text_embed."""
         images = []
         for image_path in image_paths:
             try:
@@ -187,6 +208,7 @@ class ProxyBartPipeline:
 
         with torch.no_grad():
             outputs = self.clip_model(**inputs)
+            # Concatenate along feature dimension: [B, 768] ‖ [B, 768] -> [B, 1536].
             return torch.cat([outputs.image_embeds, outputs.text_embeds], dim=1).float()
 
     def rewrite_batch(
@@ -201,9 +223,11 @@ class ProxyBartPipeline:
         with torch.no_grad():
             proxy_hidden = self.proxy(features)  # [B, num_soft_tokens, hidden_size]
             text_hidden, text_attention_mask = self._encode_text_prompts(texts)
+            # Cast to BART's parameter dtype (fp32 / bf16 depending on hardware).
             dtype = next(self.bart.parameters()).dtype
             proxy_hidden = proxy_hidden.to(dtype=dtype)
             text_hidden = text_hidden.to(dtype=dtype)
+            # Prepend proxy soft tokens to the text encoder sequence.
             hidden = torch.cat([proxy_hidden, text_hidden], dim=1)
             proxy_attention_mask = torch.ones(
                 proxy_hidden.shape[:2],
@@ -211,6 +235,7 @@ class ProxyBartPipeline:
                 device=self.device,
             )
             attention_mask = torch.cat([proxy_attention_mask, text_attention_mask], dim=1)
+            # Wrap in BaseModelOutput so BART's generate() accepts pre-computed states.
             encoder_outputs = BaseModelOutput(last_hidden_state=hidden)
             output_ids = self.bart.generate(
                 encoder_outputs=encoder_outputs,

@@ -1,17 +1,22 @@
 """
-Screencast demo: CLIP Proxy + BART-large FT Full inference on 20 test images.
+Screencast demo: CLIP Proxy + BART-large FT Full inference on 20 curated test examples.
 
-Runs the full deployment pipeline (no LLaVA at inference time):
-  image + text  ->  CLIP embeddings  ->  Proxy MLP soft tokens
+Runs the full VLM-free deployment pipeline:
+  image + text  ->  CLIP embeddings  ->  ExplanationProxy MLP soft tokens
                 ->  BART-large FT Full decoder  ->  rewrite
 
-Computes four evaluation metrics per example:
-  STA        : non-toxic probability (s-nlp/roberta_toxicity_classifier)
-  Delta STA  : STA(rewrite) - STA(original text)
-  SIM        : BERTScore F1 (roberta-large, semantic similarity)
-  CLIP Score : cosine similarity between image and rewrite text embeddings
+Computes four metrics per example and an aggregate summary table:
+  STA        : P(non-toxic)         (s-nlp/roberta_toxicity_classifier)
+  Delta STA  : STA(rewrite) - STA(original)
+  SIM        : BERTScore F1         (roberta-large)
+  CLIP Score : normalised cosine similarity between image and rewrite text embeddings
 
-Designed for clean, professional log output suitable for screen recording.
+The 20 example IDs in _SELECTED_IDS were chosen to represent the full performance
+spectrum: strong detoxification successes, moderate improvements, failures, and
+regressions — enabling a balanced qualitative discussion.
+
+Output format is optimised for clean screen recording (box-drawing characters,
+fixed-width alignment).
 """
 
 # ---------------------------------------------------------------------------
@@ -30,13 +35,13 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Silence the safetensors background conversion thread that sometimes prints a
-# spurious OSError to stderr when a model has no pytorch_model.bin/safetensors.
+# Suppress the spurious OSError that safetensors' background conversion thread
+# sometimes emits to stderr when a model lacks pytorch_model.bin/safetensors.
 _orig_thread_excepthook = threading.excepthook
 
 def _quiet_thread_excepthook(args: threading.ExceptHookArgs) -> None:
     if args.thread is not None and "auto_conversion" in args.thread.name:
-        return  # suppress safetensors conversion thread noise
+        return
     _orig_thread_excepthook(args)
 
 threading.excepthook = _quiet_thread_excepthook
@@ -81,14 +86,10 @@ for _noisy in [
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models.proxy import ExplanationProxy
 
-# ---------------------------------------------------------------------------
-# Logger and box-drawing constants
-# ---------------------------------------------------------------------------
+# ── Logger and layout constants ───────────────────────────────────────────────
 logger = logging.getLogger("screencast_demo")
 
-# 20 test examples selected to represent the full performance spectrum:
-# strong detoxification successes, moderate improvements (SIM trade-off),
-# failures to detoxify, well-preserved already-clean texts, and regressions.
+# Fixed test example IDs covering the full performance spectrum.
 _SELECTED_IDS = [
     "389", "1235", "1024679239059161088", "2040", "2357", "2527",
     "2670", "5321", "5383", "6114", "6155", "6882",
@@ -98,7 +99,7 @@ _SELECTED_IDS = [
 _SEP_HEAVY = "═" * 66
 _SEP_LIGHT = "─" * 66
 
-# Metrics box: inner width = 52 chars → total line = "  │" (3) + 52 + "│" (1) = 56
+# Metrics box: inner width = 52 → total line width = 56 ("  │" + content + "│").
 _BOX_W = 52
 _BOX_TOP    = "  ┌" + "─" * _BOX_W + "┐"
 _BOX_BOTTOM = "  └" + "─" * _BOX_W + "┘"
@@ -115,9 +116,7 @@ def _metric_row(label: str, value: str) -> str:
     return _box_line(content)
 
 
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
+# ── Logging setup ─────────────────────────────────────────────────────────────
 
 def setup_logging(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +130,7 @@ def setup_logging(output_dir: Path) -> None:
         ],
         force=True,
     )
-    # Re-apply suppression after basicConfig resets levels
+    # basicConfig resets all log levels; re-apply third-party suppressions.
     for _noisy in [
         "filelock", "urllib3", "huggingface_hub", "huggingface_hub.file_download",
         "bert_score", "absl", "matplotlib", "PIL", "torch", "codecarbon",
@@ -149,11 +148,10 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
+# ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_test_examples(jsonl_path: Path) -> List[Dict[str, Any]]:
+    """Load test JSONL; infer source dataset from image_path when not stored explicitly."""
     examples = []
     with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -168,7 +166,7 @@ def load_test_examples(jsonl_path: Path) -> List[Dict[str, Any]]:
             image_path = row.get("image_path") or ""
             if not text or not image_path:
                 continue
-            # Infer source dataset from image path
+            # Infer dataset from image path substring (harmeme / mami / mmhs150k).
             for ds in ("harmeme", "mami", "mmhs150k"):
                 if ds in image_path.lower():
                     source = ds
@@ -185,11 +183,10 @@ def load_test_examples(jsonl_path: Path) -> List[Dict[str, Any]]:
     return examples
 
 
-# ---------------------------------------------------------------------------
-# STA metric  (s-nlp/roberta_toxicity_classifier)
-# ---------------------------------------------------------------------------
+# ── STA metric (s-nlp/roberta_toxicity_classifier) ───────────────────────────
 
 def load_sta_model(hf_cache: str, device: torch.device) -> Tuple:
+    """Load s-nlp/roberta_toxicity_classifier for STA evaluation."""
     model_id = "s-nlp/roberta_toxicity_classifier"
     tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=hf_cache)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -206,15 +203,14 @@ def compute_sta_single(text: str, tokenizer, model, device: torch.device) -> flo
     inputs = {k: v.to(device) for k, v in inputs.items()}
     with torch.no_grad():
         logits = model(**inputs).logits
-        prob = torch.softmax(logits, dim=-1)[0, 0].item()  # class 0 = non-toxic
+        prob = torch.softmax(logits, dim=-1)[0, 0].item()  # index 0 = non-toxic class
     return prob
 
 
-# ---------------------------------------------------------------------------
-# CLIP  (shared for proxy pipeline features and CLIPScore metric)
-# ---------------------------------------------------------------------------
+# ── CLIP (shared for proxy pipeline features and CLIPScore metric) ────────────
 
 def load_clip(hf_cache: str, device: torch.device) -> Tuple:
+    """Load CLIP ViT-L/14; freeze and return (processor, model)."""
     model_id = "openai/clip-vit-large-patch14"
     processor = CLIPProcessor.from_pretrained(model_id, cache_dir=hf_cache)
     model = CLIPModel.from_pretrained(model_id, cache_dir=hf_cache).to(device).eval()
@@ -249,17 +245,14 @@ def compute_clip_score(
         cos = torch.nn.functional.cosine_similarity(
             out.image_embeds, out.text_embeds
         ).item()
-    return (cos + 1.0) / 2.0   # normalise to [0, 1]
+    return (cos + 1.0) / 2.0   # shift from [-1, 1] to [0, 1]
 
 
-# ---------------------------------------------------------------------------
-# BERTScore / SIM metric
-# Using BERTScorer class so the model is loaded once and reused every call,
-# avoiding repeated HTTP HEAD requests between examples.
-# ---------------------------------------------------------------------------
+# ── BERTScore / SIM metric ────────────────────────────────────────────────────
+# BERTScorer is instantiated once so roberta-large is not re-downloaded per example.
 
 def load_bertscore(hf_cache: str):
-    """Load roberta-large for BERTScore once; return a reusable BERTScorer."""
+    """Instantiate BERTScorer with roberta-large (rescaled); return for reuse across examples."""
     from bert_score import BERTScorer
     if hf_cache:
         os.environ.setdefault("BERT_SCORE_CACHE", hf_cache)
@@ -272,18 +265,17 @@ def load_bertscore(hf_cache: str):
 
 
 def compute_sim_single(original: str, rewrite: str, scorer) -> float:
-    """Return BERTScore F1 between original and rewrite."""
+    """Return BERTScore F1 (roberta-large, rescaled) as the SIM metric."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         _, _, F1 = scorer.score([rewrite], [original], verbose=False)
     return float(F1[0])
 
 
-# ---------------------------------------------------------------------------
-# BART + Proxy inference
-# ---------------------------------------------------------------------------
+# ── BART + Proxy inference ────────────────────────────────────────────────────
 
 def load_bart(checkpoint_dir: str, hf_cache: str, device: torch.device) -> Tuple:
+    """Load BART tokenizer and model from a fine-tuned checkpoint."""
     tokenizer = BartTokenizer.from_pretrained(checkpoint_dir, cache_dir=hf_cache)
     model = BartForConditionalGeneration.from_pretrained(
         checkpoint_dir, cache_dir=hf_cache
@@ -292,6 +284,7 @@ def load_bart(checkpoint_dir: str, hf_cache: str, device: torch.device) -> Tuple
 
 
 def load_proxy(proxy_checkpoint: str, device: torch.device) -> ExplanationProxy:
+    """Load ExplanationProxy weights from .pt file; read num_soft_tokens from proxy_config.json."""
     proxy_config_path = Path(proxy_checkpoint).parent / "proxy_config.json"
     num_soft_tokens = 16
     bart_hidden_size = 1024
@@ -333,8 +326,8 @@ def generate_rewrite(
     num_beams: int = 4,
     no_repeat_ngram_size: int = 3,
 ) -> str:
-    """Run the proxy+BART pipeline for a single example."""
-    # 1. CLIP features: image + original text -> concatenated 1536-dim vector
+    """Full proxy+BART rewrite for one example: CLIP -> proxy tokens -> encoder concat -> beam decode."""
+    # 1. CLIP: image + text -> [1, 1536] joint embedding.
     try:
         img = Image.open(image_path).convert("RGB")
     except Exception:
@@ -356,13 +349,13 @@ def generate_rewrite(
         clip_out = clip_model(**clip_inputs)
         features = torch.cat(
             [clip_out.image_embeds, clip_out.text_embeds], dim=1
-        ).float()  # [1, 1536]
+        ).float()  # [1, 1536]: image_embed ‖ text_embed
 
-    # 2. Proxy MLP: CLIP features -> soft encoder tokens
+    # 2. Proxy MLP: [1, 1536] -> [1, num_soft_tokens, hidden_size].
     with torch.no_grad():
-        proxy_hidden = proxy(features)  # [1, num_soft_tokens, hidden_size]
+        proxy_hidden = proxy(features)
 
-    # 3. BART none-prompt encoder states
+    # 3. BART text encoder (none-condition prompt) -> [1, T, hidden_size].
     prompt = _build_none_explicit_detox_prompt(original_text)
     enc_inputs = bart_tokenizer(
         prompt,
@@ -379,7 +372,7 @@ def generate_rewrite(
         )
         text_hidden = enc_out.last_hidden_state  # [1, T, hidden_size]
 
-    # 4. Concatenate proxy soft tokens + BART text encoder states
+    # 4. Prepend proxy soft tokens to the BART text encoder sequence.
     dtype = next(bart_model.parameters()).dtype
     proxy_hidden = proxy_hidden.to(dtype=dtype)
     text_hidden = text_hidden.to(dtype=dtype)
@@ -389,7 +382,7 @@ def generate_rewrite(
     )
     attention_mask = torch.cat([proxy_mask, enc_inputs["attention_mask"]], dim=1)
 
-    # 5. Beam-search decoding
+    # 5. Beam search over concatenated encoder representation.
     with torch.no_grad():
         output_ids = bart_model.generate(
             encoder_outputs=BaseModelOutput(last_hidden_state=hidden),
@@ -403,9 +396,7 @@ def generate_rewrite(
     return bart_tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
 
-# ---------------------------------------------------------------------------
-# Clean logging helpers
-# ---------------------------------------------------------------------------
+# ── Logging display helpers ───────────────────────────────────────────────────
 
 def log_section(title: str) -> None:
     logger.info("")
@@ -469,6 +460,7 @@ def log_aggregate_summary(
     sim_scores: List[float],
     clip_scores: List[float],
 ) -> None:
+    """Print a formatted aggregate table of mean ± std for all four metrics."""
     # Column widths: label=24, mean=10, std=12 (inner) → total inner = 50
     top    = "  ╔" + "═" * 26 + "╦" + "═" * 12 + "╦" + "═" * 12 + "╗"
     divhdr = "  ╠" + "═" * 26 + "╬" + "═" * 12 + "╬" + "═" * 12 + "╣"
@@ -498,9 +490,7 @@ def log_aggregate_summary(
     logger.info("")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -514,7 +504,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--bart_checkpoint",
         type=str,
-        default="/scratch/stages/hmr_stage2_phase2_full_explicit_detox_checkpoint",
+        default="/scratch/stages/hmr_stage2_full_explicit_detox_checkpoint",
     )
     p.add_argument(
         "--proxy_checkpoint",
@@ -551,9 +541,7 @@ def main() -> int:
     logger.info("  Test set  : %s", args.input_jsonl)
     logger.info("")
 
-    # -----------------------------------------------------------------------
-    # Step 1: Load test examples
-    # -----------------------------------------------------------------------
+    # ── Step 1: Load test examples ────────────────────────────────────────────
     log_section("Step 1 -- Loading test set and selecting examples")
 
     all_examples = load_test_examples(args.input_jsonl)
@@ -564,9 +552,7 @@ def main() -> int:
     logger.info("  Evaluating                 : %d examples", len(sampled))
     logger.info("  IDs: %s", ", ".join(ex["id"] for ex in sampled))
 
-    # -----------------------------------------------------------------------
-    # Step 2: Load evaluation metric models
-    # -----------------------------------------------------------------------
+    # ── Step 2: Load evaluation metric models ─────────────────────────────────
     log_section("Step 2 -- Loading evaluation metric models")
 
     logger.info("  [2-A]  STA classifier  :  s-nlp/roberta_toxicity_classifier")
@@ -584,9 +570,7 @@ def main() -> int:
     bert_scorer = load_bertscore(args.hf_cache)
     logger.info("         Loaded in %.1f s", time.time() - t0)
 
-    # -----------------------------------------------------------------------
-    # Step 3: Load proxy + BART pipeline
-    # -----------------------------------------------------------------------
+    # ── Step 3: Load CLIP Proxy + BART pipeline ───────────────────────────────
     log_section("Step 3 -- Loading CLIP Proxy + BART-large FT Full pipeline")
 
     logger.info("  [3-A]  BART checkpoint :  %s", args.bart_checkpoint)
@@ -602,9 +586,7 @@ def main() -> int:
     logger.info("")
     logger.info("  All models loaded. Starting inference.")
 
-    # -----------------------------------------------------------------------
-    # Step 4: Inference loop
-    # -----------------------------------------------------------------------
+    # ── Step 4: Inference loop ────────────────────────────────────────────────
     log_section("Step 4 -- Generating rewrites and computing metrics")
 
     results = []
@@ -614,7 +596,6 @@ def main() -> int:
         image_path = example["image_path"]
         original_text = example["original_text"]
 
-        # Generate rewrite via proxy + BART
         rewrite = generate_rewrite(
             image_path=image_path,
             original_text=original_text,
@@ -626,20 +607,16 @@ def main() -> int:
             device=device,
         )
 
-        # STA for original and rewrite
         sta_orig    = compute_sta_single(original_text, sta_tokenizer, sta_model, device)
         sta_rewrite = compute_sta_single(rewrite,       sta_tokenizer, sta_model, device)
         delta       = sta_rewrite - sta_orig
 
-        # Semantic similarity (BERTScore F1)
         sim = compute_sim_single(original_text, rewrite, bert_scorer)
 
-        # CLIP image-text alignment for the rewrite
         clip_score = compute_clip_score(
             image_path, rewrite, clip_processor, clip_model, device
         )
 
-        # Accumulate
         sta_scores.append(sta_rewrite)
         delta_scores.append(delta)
         sim_scores.append(sim)
@@ -669,9 +646,7 @@ def main() -> int:
             "clip_score": clip_score,
         })
 
-    # -----------------------------------------------------------------------
-    # Step 5: Aggregate summary
-    # -----------------------------------------------------------------------
+    # ── Step 5: Aggregate summary ─────────────────────────────────────────────
     log_section("Step 5 -- Aggregate results")
     log_aggregate_summary(
         n=len(sampled),
@@ -681,7 +656,6 @@ def main() -> int:
         clip_scores=clip_scores,
     )
 
-    # Save results
     out_path = args.output_dir / "screencast_results.jsonl"
     with out_path.open("w", encoding="utf-8") as f:
         for rec in results:

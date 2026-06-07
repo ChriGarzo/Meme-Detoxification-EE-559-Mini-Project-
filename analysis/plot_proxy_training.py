@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 
 def load_json(path: Path) -> Optional[Dict[str, Any]]:
+    """Return parsed JSON from path, or None if the file does not exist."""
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as f:
@@ -30,10 +31,16 @@ def load_json(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def epochs(values: List[float]) -> List[int]:
+    """Return 1-indexed epoch numbers matching a list of per-epoch metric values."""
     return list(range(1, len(values) + 1))
 
 
 def plot_proxy_curves(history: Dict[str, Any], eval_results: Optional[Dict[str, Any]], output_dir: Path) -> None:
+    """Render proxy training curves and write PNG files to output_dir.
+
+    Produces: proxy_loss_curves.png, proxy_generalization_gap.png (if both splits
+    available), proxy_training_summary.png.
+    """
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -45,7 +52,7 @@ def plot_proxy_curves(history: Dict[str, Any], eval_results: Optional[Dict[str, 
     if max_epochs == 0:
         raise ValueError("No train_loss or val_loss values found in proxy training history.")
 
-    # Main loss plot.
+    # ── Main loss curves ──────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 5))
     if train_loss:
         ax.plot(epochs(train_loss), train_loss, color="#1976D2", linewidth=2.2, marker="o", label="Train MSE")
@@ -64,7 +71,7 @@ def plot_proxy_curves(history: Dict[str, Any], eval_results: Optional[Dict[str, 
     fig.savefig(output_dir / "proxy_loss_curves.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    # Generalization gap plot.
+    # ── Generalization gap ────────────────────────────────────────────────
     if train_loss and val_loss:
         n = min(len(train_loss), len(val_loss))
         gap = [val_loss[i] - train_loss[i] for i in range(n)]
@@ -79,7 +86,7 @@ def plot_proxy_curves(history: Dict[str, Any], eval_results: Optional[Dict[str, 
         fig.savefig(output_dir / "proxy_generalization_gap.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    # Compact text summary as a PNG for slides/reports.
+    # ── Text summary PNG (slide/report-friendly) ──────────────────────────
     final_train = train_loss[-1] if train_loss else None
     final_val = val_loss[-1] if val_loss else None
     best_val = min(val_loss) if val_loss else None

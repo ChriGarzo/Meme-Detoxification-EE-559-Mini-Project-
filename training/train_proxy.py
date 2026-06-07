@@ -1,23 +1,36 @@
 """
-Stage 4: Train the ExplanationProxy network.
+Stage 4 trainer: ExplanationProxy MLP — CLIP features to BART soft encoder tokens.
 
-Trains a lightweight 3-layer MLP to predict a short sequence of BART encoder
-soft tokens from CLIP features, enabling VLM-free deployment (no LLaVA at
-inference time).
+Pipeline position: AFTER train_stage2.py (full condition) has completed.
 
-Pipeline position: AFTER train_stage2_phase2 (full condition) has completed.
+Inputs : Stage 1 pseudo-rewrite JSONL (image_path lookup) +
+         Stage 2 train/val JSONL (original_text, target_group,
+         visual_evidence, implicit_meaning).
+Outputs: <output_dir>/best_proxy.pt   — best-val-MSE proxy checkpoint
+         <output_dir>/proxy_config.json
+         <output_dir>/training_history.json
+         <output_dir>/eval_results.json
+
+Design decisions:
+- The proxy predicts `num_soft_tokens` BART encoder hidden states from a
+  1536-dim CLIP feature vector (image_embed ‖ text_embed).  The training
+  target is the h_full BART encoder output for the full-condition prompt,
+  minimising MSE.  This distills structured explanation grounding into a
+  compact representation that can replace the LLaVA stage at inference.
+- BART is loaded from the full-condition Stage 2 checkpoint and frozen;
+  it is only used to produce soft-token targets, never updated.
 
 Usage (cluster):
-    python training/train_proxy.py \
-        --stage1_output_dir    /scratch/hmr_stage1_output \
-        --stage2_dataset_dir   /scratch/hmr_stage2_dataset \
-        --bart_checkpoint_dir  /scratch/hmr_stage2_phase2_full_checkpoint \
-        --output_dir           /scratch/hmr_proxy_checkpoint \
-        --hf_cache             /scratch/hf_cache \
-        --num_train_epochs 20 \
-        --batch_size 64 \
-        --learning_rate 1e-3 \
-        --input_format legacy \
+    python training/train_proxy.py \\
+        --stage1_output_dir    /scratch/hmr_stage1_output \\
+        --stage2_dataset_dir   /scratch/hmr_stage2_dataset \\
+        --bart_checkpoint_dir  /scratch/hmr_stage2_full_checkpoint \\
+        --output_dir           /scratch/hmr_proxy_checkpoint \\
+        --hf_cache             /scratch/hf_cache \\
+        --num_train_epochs 20 \\
+        --batch_size 64 \\
+        --learning_rate 1e-3 \\
+        --input_format legacy \\
         --seed 42
 """
 
@@ -37,12 +50,10 @@ from utils.debug import DEBUG_CONFIG, is_debug_mode, set_seeds, make_debug_datas
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Data loading helpers
-# ---------------------------------------------------------------------------
+# ── Data loading helpers ──────────────────────────────────────────────────────
 
 def _build_stage1_image_index(stage1_output_dir: str) -> Dict[str, str]:
-    """Build an index from Stage 1 outputs: "dataset::id" -> image_path."""
+    """Build {dataset::id: image_path} lookup from Stage 1 pseudo-rewrite JSONL files."""
     root = Path(stage1_output_dir)
     if not root.exists():
         logger.warning(f"Stage 1 output dir not found: {root}")
@@ -71,16 +82,16 @@ def _build_stage1_image_index(stage1_output_dir: str) -> Dict[str, str]:
                 if not ex_id or not img:
                     continue
 
-                # Prefer dataset-scoped key to avoid collisions across datasets.
+                # Dataset-scoped key prevents collisions across datasets.
                 image_index[f"{dataset_name}::{ex_id}"] = img
-                # Keep an id-only fallback for compatibility with older records.
+                # Bare-ID fallback for older records that lack a dataset field.
                 image_index.setdefault(str(ex_id), img)
 
     logger.info(f"Indexed {len(image_index)} stage1 image references")
     return image_index
 
 def load_stage2_dataset(stage1_output_dir: str, dataset_dir: str, debug: bool) -> tuple:
-    """Load stage2 train/val JSONL produced by build_stage2_dataset.py."""
+    """Load Stage 2 train/val JSONL and attach image paths from the Stage 1 index."""
     if debug:
         raw = make_debug_dataset(n=DEBUG_CONFIG["max_samples"])
         examples = [
@@ -91,7 +102,7 @@ def load_stage2_dataset(stage1_output_dir: str, dataset_dir: str, debug: bool) -
                 "visual_evidence": e.get("visual_evidence"),
                 "implicit_meaning": (e.get("explanation") or {}).get("implicit_meaning"),
             }
-            for e in raw if e.get("label") == 1    # only hateful (have rewrites)
+            for e in raw if e.get("label") == 1    # proxy is trained only on hateful examples (have pseudo-rewrites)
         ]
         split = max(1, len(examples) - 2)
         return examples[:split], examples[split:]
@@ -157,9 +168,7 @@ def load_stage2_dataset(stage1_output_dir: str, dataset_dir: str, debug: bool) -
     return train, val
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 4: Train ExplanationProxy network")
@@ -220,9 +229,7 @@ def main():
     print(f"{'='*60}\n")
     logger.info(f"Using device: {device}")
 
-    # -----------------------------------------------------------------------
-    # Data
-    # -----------------------------------------------------------------------
+    # ── Data ──────────────────────────────────────────────────────────────────
     train_examples, val_examples = load_stage2_dataset(
         args.stage1_output_dir,
         args.stage2_dataset_dir,
@@ -233,18 +240,19 @@ def main():
         num_epochs  = DEBUG_CONFIG["proxy_epochs"]
         batch_size  = DEBUG_CONFIG["proxy_batch_size"]
         bart_hidden = DEBUG_CONFIG["bart_hidden_size"]
-        bart_model  = DEBUG_CONFIG["stage2_model"]    # bart-base
+        bart_model  = DEBUG_CONFIG["stage2_model"]    # bart-base in debug mode
     else:
         num_epochs  = args.num_train_epochs
         batch_size  = args.batch_size
-        bart_hidden = 1024           # bart-large
+        bart_hidden = 1024           # BART-large hidden size
         bart_model  = args.bart_checkpoint_dir
 
     logger.info(f"epochs={num_epochs}, batch={batch_size}, bart_hidden={bart_hidden}")
 
-    # -----------------------------------------------------------------------
-    # Load BART rewriter (frozen — only used to extract h_full targets)
-    # -----------------------------------------------------------------------
+    # ── Load BART (frozen) ────────────────────────────────────────────────────
+    # BART is the full-condition Stage 2 checkpoint; it is used only to extract
+    # h_full encoder hidden states that serve as the MSE regression targets for
+    # the proxy.  No gradients flow through BART during proxy training.
     from models.rewriter import MemeRewriter
     rewriter = MemeRewriter(
         model_name=bart_model,
@@ -252,14 +260,11 @@ def main():
         device=device,
     )
     rewriter.load_model()
-    # Freeze all BART parameters — we never update them here
     for p in rewriter.model.parameters():
         p.requires_grad = False
     logger.info("BART model loaded and frozen")
 
-    # -----------------------------------------------------------------------
-    # Load ExplanationProxyTrainer (also loads CLIP)
-    # -----------------------------------------------------------------------
+    # ── ExplanationProxyTrainer (also loads CLIP) ─────────────────────────────
     from models.proxy import ExplanationProxyTrainer
     trainer = ExplanationProxyTrainer(
         rewriter=rewriter,
@@ -271,9 +276,7 @@ def main():
         task_prefix=args.task_prefix,
     )
 
-    # -----------------------------------------------------------------------
-    # Unpack lists for the trainer's interface
-    # -----------------------------------------------------------------------
+    # ── Unpack examples into parallel lists for the trainer API ───────────────
     def _unpack(examples):
         images   = [e["image_path"]      for e in examples]
         texts    = [e["original_text"]   for e in examples]
@@ -285,9 +288,7 @@ def main():
     tr_images, tr_texts, tr_tgs, tr_ves, tr_ims = _unpack(train_examples)
     va_images, va_texts, va_tgs, va_ves, va_ims = _unpack(val_examples)
 
-    # -----------------------------------------------------------------------
-    # Train
-    # -----------------------------------------------------------------------
+    # ── Training loop ─────────────────────────────────────────────────────────
     os.makedirs(args.output_dir, exist_ok=True)
 
     history = trainer.train(
@@ -307,7 +308,7 @@ def main():
         save_dir=args.output_dir,
     )
 
-    # Save training history
+    # ── Save artefacts ────────────────────────────────────────────────────────
     history_path = Path(args.output_dir) / "training_history.json"
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
@@ -331,9 +332,7 @@ def main():
     print(f"  Checkpoint: {args.output_dir}")
     print(f"{'='*60}\n")
 
-    # -----------------------------------------------------------------------
-    # Quick evaluation
-    # -----------------------------------------------------------------------
+    # ── Final validation evaluation ───────────────────────────────────────────
     logger.info("Running final proxy evaluation on validation set...")
     eval_results = trainer.evaluate(
         images=va_images,

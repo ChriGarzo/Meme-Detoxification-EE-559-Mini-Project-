@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-# === Local debug script (no cluster) ===
-# Sets DEBUG=1, runs full pipeline on CPU with synthetic data
-# Useful for testing before submitting to RCP
+# =============================================================================
+# Local end-to-end debug run (CPU-only, no cluster required)
+#
+# Sets DEBUG=1 on every Python step, triggering small synthetic-data code
+# paths inside each module.  No GPU or RunAI access required.
+#
+# Run from the repo root:
+#   bash scripts/run_debug_local.sh
+#
+# Purpose: verify that all pipeline modules import correctly and reach their
+#          main execution paths before submitting real jobs to the RCP cluster.
+# =============================================================================
 
 export DEBUG=1
 export HF_HOME="./.cache/huggingface"
@@ -26,8 +35,8 @@ python3 data/preprocess/build_stage2_dataset.py \
     --output_dir outputs/debug_run/stage2_dataset \
     --debug
 
-echo "=== [DEBUG] Step 4: Train Stage 2 (full conditioning, with ParaDetox mixing) ==="
-python3 training/train_stage2_phase2.py --condition full --debug
+echo "=== [DEBUG] Step 4: Train Stage 2 (full conditioning) ==="
+python3 training/train_stage2.py --condition full --debug
 
 echo "=== [DEBUG] Step 5: Run Stage 2 inference ==="
 python3 inference/run_stage2.py --condition full --debug

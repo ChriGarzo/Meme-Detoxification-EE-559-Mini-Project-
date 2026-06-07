@@ -11,13 +11,13 @@ set -e
 # Example:
 #   bash scripts/runai_train_proxy.sh 123456
 #
-# Note: Run this AFTER Stage 2 Phase 2 (full condition) has completed.
+# Note: Run this AFTER Stage 2 (full condition) has completed.
 #       Trains a lightweight CLIP→BART soft-token MLP to bypass LLaVA at deployment.
 #       Set PROXY_NUM_SOFT_TOKENS=32 to try a longer proxy encoder memory.
 #
 # Optional environment variables:
 #   BART_SUFFIX    suffix appended to the BART checkpoint dir name (default: "")
-#                  e.g. BART_SUFFIX=_explicit_detox reads hmr_stage2_phase2_full_explicit_detox_checkpoint
+#                  e.g. BART_SUFFIX=_explicit_detox reads hmr_stage2_full_explicit_detox_checkpoint
 #   PROXY_SUFFIX   suffix appended to the proxy output dir name (default: same as BART_SUFFIX)
 #                  e.g. PROXY_SUFFIX=_explicit_detox writes hmr_proxy_checkpoint_explicit_detox
 # =============================================================================
@@ -105,7 +105,7 @@ runai submit hmr-train-proxy${JOB_SUFFIX} \
     --command -- python3 ${SCRIPT_PATH} \
         --stage1_output_dir /scratch/stages/hmr_stage1_output \
         --stage2_dataset_dir /scratch/stages/hmr_stage2_dataset \
-        --bart_checkpoint_dir /scratch/stages/hmr_stage2_phase2_full${BART_SUFFIX}_checkpoint \
+        --bart_checkpoint_dir /scratch/stages/hmr_stage2_full${BART_SUFFIX}_checkpoint \
         --output_dir /scratch/stages/hmr_proxy_checkpoint${PROXY_SUFFIX} \
         --hf_cache /scratch/hf_cache \
         --num_train_epochs 20 \

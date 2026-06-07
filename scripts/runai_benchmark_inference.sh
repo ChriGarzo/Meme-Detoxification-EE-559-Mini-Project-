@@ -19,7 +19,7 @@ set -e
 #   4. Report mean/std latency and estimated CO2 per inference
 #
 # Prerequisites:
-#   - Fine-tuned BART checkpoint exists at /scratch/hmr_stage2_phase2_full_checkpoint
+#   - Fine-tuned BART checkpoint exists at /scratch/hmr_stage2_full_checkpoint
 #   - HuggingFace models cached at /scratch/hf_cache
 #     (LLaVA and DetoxLLM are downloaded automatically on first run)
 #
@@ -99,7 +99,7 @@ runai submit hmr-benchmark-inference \
         cd ${CODE_ROOT} &&
         python3 analysis/benchmark_single_inference.py \
             --validation_jsonl /scratch/hmr_stage2_dataset/val.jsonl \
-            --checkpoint_dir   /scratch/hmr_stage2_phase2_full_checkpoint \
+            --checkpoint_dir   /scratch/hmr_stage2_full_checkpoint \
             --hf_cache         /scratch/hf_cache \
             --output_dir       /scratch/hmr_inference_benchmark \
             --n_warmup ${N_WARMUP} \

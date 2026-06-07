@@ -1,21 +1,19 @@
 """
-Compare Stage 2 fine-tuned vs non-fine-tuned BART outputs on identical examples.
+Compare fine-tuned vs base BART Stage 2 outputs on aligned examples.
 
-This script aligns examples by `id` across two JSONL files (fine-tuned and base),
-then computes evaluation metrics side-by-side and reports deltas.
+Examples are aligned by `id`; metrics are computed in parallel on the two
+output sets and deltas (finetuned − base) are reported.
 
-Default metrics:
-  - STA
-  - SIM
+Default metrics: STA, SIM
+Optional (slower): CLIPScore (--with_clip), Rewrite Precision (--with_rp,
+  requires Stage 1 explanations JSONL)
 
-Optional metrics (slower):
-  - CLIPScore via --with_clip
-  - Rewrite Precision via --with_rp (requires Stage 1 explanations JSONL)
+Output: a JSON file with per-set metrics, per-metric deltas, and average word lengths.
 
 Example:
-  python analysis/compare_stage2_outputs.py \
-    --finetuned_jsonl /scratch/hmr_eval_stage2_visual_only/stage2_rewrites_visual_only.jsonl \
-    --base_jsonl /scratch/hmr_eval_stage2_visual_only_base/stage2_rewrites_visual_only.jsonl \
+  python analysis/compare_stage2_outputs.py \\
+    --finetuned_jsonl /scratch/hmr_eval_stage2_visual_only/stage2_rewrites_visual_only.jsonl \\
+    --base_jsonl /scratch/hmr_eval_stage2_visual_only_base/stage2_rewrites_visual_only.jsonl \\
     --output_json /scratch/hmr_eval_compare/visual_only_finetuned_vs_base.json
 """
 
@@ -30,7 +28,6 @@ import numpy as np
 
 from evaluation.metrics import (
     compute_clipscore,
-    compute_multimodal_hateness,
     compute_rewrite_precision,
     compute_sim,
     compute_sta,
@@ -58,6 +55,10 @@ def load_jsonl(path: Path) -> List[Dict]:
 
 
 def index_by_id(rows: List[Dict], label: str) -> Dict[str, Dict]:
+    """Index rows by string id; warn on missing or duplicate ids.
+
+    Duplicate ids keep the last occurrence, matching the usual JSONL append convention.
+    """
     idx: Dict[str, Dict] = {}
     missing = 0
     duplicate = 0
@@ -81,11 +82,15 @@ def align_rows(
     finetuned_rows: List[Dict],
     base_rows: List[Dict],
 ) -> Tuple[List[Dict], List[Dict]]:
+    """Return parallel lists of (finetuned, base) rows sharing the same ids.
+
+    finetuned ordering is preserved; base rows are reordered to match.
+    """
     ft_idx = index_by_id(finetuned_rows, "finetuned")
     base_idx = index_by_id(base_rows, "base")
 
     common_ids = [str(r.get("id")) for r in finetuned_rows if r.get("id") is not None and str(r.get("id")) in base_idx]
-    # Preserve finetuned ordering; deduplicate while keeping order.
+    # Deduplicate while preserving finetuned order.
     seen = set()
     ordered_ids: List[str] = []
     for cid in common_ids:
@@ -118,6 +123,7 @@ def load_explanations_by_id(path: Path) -> Dict[str, Dict]:
 
 
 def summarize(metric: Optional[Dict]) -> Optional[float]:
+    """Extract the scalar mean from a metric dict returned by evaluation functions."""
     if metric is None:
         return None
     return float(metric.get("mean")) if "mean" in metric else None
@@ -130,7 +136,6 @@ def evaluate_set(
     image_paths: List[str],
     explanations: Optional[List[Dict]],
     with_clip: bool,
-    with_multimodal_hate: bool,
     with_rp: bool,
     hf_cache: Optional[str],
 ) -> Dict:
@@ -144,15 +149,6 @@ def evaluate_set(
         out["clip"] = compute_clipscore(image_paths, rewrites)
     else:
         out["clip"] = None
-
-    if with_multimodal_hate:
-        out["multimodal_hate"] = compute_multimodal_hateness(
-            images=image_paths,
-            rewrites=rewrites,
-            hf_cache=hf_cache,
-        )
-    else:
-        out["multimodal_hate"] = None
 
     if with_rp:
         if explanations is None:
@@ -179,8 +175,6 @@ def main() -> None:
     parser.add_argument("--output_json", type=Path, required=True)
     parser.add_argument("--hf_cache", type=str, default=None)
     parser.add_argument("--with_clip", action="store_true", help="Also compute CLIPScore")
-    parser.add_argument("--with_multimodal_hate", action="store_true",
-                        help="Also compute VisualBERT multimodal hateness/non-hate rates")
     parser.add_argument("--with_rp", action="store_true", help="Also compute Rewrite Precision")
     parser.add_argument(
         "--stage1_explanations_jsonl",
@@ -222,7 +216,6 @@ def main() -> None:
         image_paths=image_paths,
         explanations=explanations,
         with_clip=args.with_clip,
-        with_multimodal_hate=args.with_multimodal_hate,
         with_rp=args.with_rp,
         hf_cache=args.hf_cache,
     )
@@ -233,7 +226,6 @@ def main() -> None:
         image_paths=image_paths,
         explanations=explanations,
         with_clip=args.with_clip,
-        with_multimodal_hate=args.with_multimodal_hate,
         with_rp=args.with_rp,
         hf_cache=args.hf_cache,
     )
@@ -243,13 +235,6 @@ def main() -> None:
         a = summarize(ft_metrics.get(key))
         b = summarize(base_metrics.get(key))
         deltas[key] = None if (a is None or b is None) else (a - b)
-    if args.with_multimodal_hate:
-        ft_mm = ft_metrics.get("multimodal_hate") or {}
-        base_mm = base_metrics.get("multimodal_hate") or {}
-        for key in ["hate_prob_mean", "hate_pred_rate", "non_hate_pred_rate"]:
-            a = ft_mm.get(key)
-            b = base_mm.get(key)
-            deltas[f"multimodal_hate__{key}"] = None if (a is None or b is None) else float(a - b)
 
     result = {
         "num_aligned_examples": len(aligned_ft),
@@ -276,27 +261,6 @@ def main() -> None:
     print(f"SIM  : ft={fmt(summarize(ft_metrics['sim']))} | base={fmt(summarize(base_metrics['sim']))} | delta={fmt(deltas['sim'])}")
     if args.with_clip:
         print(f"CLIP : ft={fmt(summarize(ft_metrics['clip']))} | base={fmt(summarize(base_metrics['clip']))} | delta={fmt(deltas['clip'])}")
-    if args.with_multimodal_hate:
-        ft_mm = ft_metrics.get("multimodal_hate") or {}
-        base_mm = base_metrics.get("multimodal_hate") or {}
-        print(
-            "MM-HATE prob: "
-            f"ft={fmt(ft_mm.get('hate_prob_mean'))} | "
-            f"base={fmt(base_mm.get('hate_prob_mean'))} | "
-            f"delta={fmt(deltas.get('multimodal_hate__hate_prob_mean'))}"
-        )
-        print(
-            "MM-HATE rate: "
-            f"ft={fmt(ft_mm.get('hate_pred_rate'))} | "
-            f"base={fmt(base_mm.get('hate_pred_rate'))} | "
-            f"delta={fmt(deltas.get('multimodal_hate__hate_pred_rate'))}"
-        )
-        print(
-            "MM-STA rate : "
-            f"ft={fmt(ft_mm.get('non_hate_pred_rate'))} | "
-            f"base={fmt(base_mm.get('non_hate_pred_rate'))} | "
-            f"delta={fmt(deltas.get('multimodal_hate__non_hate_pred_rate'))}"
-        )
     if args.with_rp:
         print(f"RP   : ft={fmt(summarize(ft_metrics['rewrite_precision']))} | base={fmt(summarize(base_metrics['rewrite_precision']))} | delta={fmt(deltas['rewrite_precision'])}")
     print(f"Avg words: ft={result['avg_word_length']['finetuned']:.2f} | base={result['avg_word_length']['base']:.2f} | delta={result['avg_word_length']['delta_finetuned_minus_base']:.2f}")

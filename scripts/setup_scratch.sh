@@ -10,11 +10,10 @@ mkdir -p /scratch/hmr_data/mami/images
 mkdir -p /scratch/hmr_data/mmhs150k/images
 mkdir -p /scratch/hmr_stage1_output
 mkdir -p /scratch/hmr_stage2_dataset
-mkdir -p /scratch/hmr_stage2_phase1_checkpoint
-mkdir -p /scratch/hmr_stage2_phase2_full_checkpoint
-mkdir -p /scratch/hmr_stage2_phase2_target_only_checkpoint
-mkdir -p /scratch/hmr_stage2_phase2_visual_only_checkpoint
-mkdir -p /scratch/hmr_stage2_phase2_none_checkpoint
+mkdir -p /scratch/hmr_stage2_full_checkpoint
+mkdir -p /scratch/hmr_stage2_target_only_checkpoint
+mkdir -p /scratch/hmr_stage2_visual_only_checkpoint
+mkdir -p /scratch/hmr_stage2_none_checkpoint
 mkdir -p /scratch/hmr_proxy_checkpoint
 mkdir -p /scratch/hmr_eval_results
 echo "Directory structure created."

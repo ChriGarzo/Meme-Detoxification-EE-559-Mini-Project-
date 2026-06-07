@@ -1,6 +1,11 @@
 """
 Central debug configuration for the hateful meme rewriting pipeline.
-All scripts import DEBUG settings from here to ensure consistent behavior.
+
+All pipeline scripts import DEBUG_CONFIG, is_debug_mode(), make_debug_dataset(),
+and set_seeds() from this module to ensure a single source of truth for reduced-
+scale debug overrides (bart-base instead of bart-large, 1 epoch, tiny batches).
+
+DEBUG mode is activated by --debug CLI flag or DEBUG=1 environment variable.
 """
 
 import os
@@ -9,11 +14,9 @@ from typing import List, Dict, Any
 
 DEBUG_CONFIG = {
     "max_samples": 16,
-    # Stage 1: same model but batch_size=1 to reduce memory
     "stage1_model": "llava-hf/llava-v1.6-mistral-7b-hf",
-    "stage1_batch_size": 1,
-    # Stage 2: replace bart-large with bart-base
-    "stage2_model": "facebook/bart-base",
+    "stage1_batch_size": 1,   # batch=1 keeps peak VRAM manageable in debug
+    "stage2_model": "facebook/bart-base",  # swap for bart-large in production
     "num_train_epochs": 1,
     "max_steps": 4,
     "save_steps": 2,
@@ -28,18 +31,17 @@ DEBUG_CONFIG = {
     "skip_bertscore": True,
     "dummy_bertscore": 0.5,
     "output_dir_suffix": "_debug",
-    # Proxy network: reduced architecture for CPU
     "proxy_hidden_dim": 256,
     "proxy_epochs": 2,
     "proxy_batch_size": 4,
     "proxy_max_steps": 4,
-    # bart-base hidden size is 768 (not 1024); proxy output dim must match
+    # bart-base hidden size is 768 (not 1024 as in bart-large); proxy output dim must match
     "bart_hidden_size": 768,
 }
 
 
 def is_debug_mode(args=None) -> bool:
-    """Check if debug mode is active from args or environment variable."""
+    """Return True if --debug flag is set or DEBUG=1 is in the environment."""
     env_debug = bool(int(os.environ.get("DEBUG", "0")))
     if args is not None and hasattr(args, "debug"):
         return args.debug or env_debug
@@ -47,10 +49,11 @@ def is_debug_mode(args=None) -> bool:
 
 
 def make_debug_dataset(n: int = 16) -> List[Dict[str, Any]]:
-    """
-    Returns synthetic in-memory examples mimicking real dataset structure.
-    Fields: id, image_path, text, label, target_group, visual_evidence, explanation
-    image_path values do NOT need to exist on disk.
+    """Return n synthetic examples mimicking the real dataset schema.
+
+    The first half are hateful (label=1) with target/visual fields populated;
+    the second half are benign (label=0). image_path values need not exist on disk.
+    Fields: id, image_path, text, label, dataset, target_group, visual_evidence, explanation.
     """
     examples = []
 
@@ -125,7 +128,7 @@ def make_debug_dataset(n: int = 16) -> List[Dict[str, Any]]:
 
 
 def set_seeds(seed: int = 42):
-    """Set all random seeds for reproducibility."""
+    """Set Python, NumPy, PyTorch, and HuggingFace seeds for reproducibility."""
     import torch
     import numpy as np
     random.seed(seed)

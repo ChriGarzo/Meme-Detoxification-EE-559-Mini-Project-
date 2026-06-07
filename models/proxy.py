@@ -1,3 +1,25 @@
+"""
+proxy.py — CLIP-to-BART proxy network for the hateful meme detoxification pipeline.
+
+At inference time, the full teacher pipeline (LLaVA explain → BART encode) is expensive.
+ExplanationProxy learns to approximate the BART encoder memory from cheap CLIP features,
+enabling the student (BART-LoRA) to produce detoxified rewrites without the teacher.
+
+Architecture:
+  - Input: concatenated CLIP-ViT-L/14 image and text embeddings [B, 1536]
+    (768 + 768; clip-vit-large-patch14 chosen to match BART-large's representational scale)
+  - Two residual-style fully-connected blocks (Linear → LayerNorm → GELU)
+  - Output projection: [B, num_soft_tokens × bart_hidden_size] → reshaped to
+    [B, num_soft_tokens, bart_hidden_size], a fixed-length "soft encoder memory"
+
+Training (ExplanationProxyTrainer):
+  - Targets: BART encoder outputs for full-condition inputs (all three explanation fields),
+    adaptive-average-pooled to num_soft_tokens to match the proxy output length.
+  - Objective: MSE in encoder-representation space.
+  - Features and targets are extracted once before the training loop and kept on CPU
+    as float32 to avoid peak GPU memory pressure and dtype mismatches.
+"""
+
 import logging
 import torch
 import torch.nn as nn
@@ -16,69 +38,52 @@ logger = logging.getLogger(__name__)
 
 class ExplanationProxy(nn.Module):
     """
-    Neural network to predict a short sequence of BART encoder hidden states
-    from CLIP embeddings.
+    MLP that predicts soft BART encoder tokens from concatenated CLIP image+text embeddings.
 
-    Input: concatenated CLIP image and text embeddings [B, 1536]
-    Output: predicted soft encoder tokens [B, num_soft_tokens, bart_hidden_size]
+    Input: [B, 1536]  (768-dim CLIP image embed ∥ 768-dim CLIP text embed)
+    Output: [B, num_soft_tokens, bart_hidden_size]
     """
 
     def __init__(self, bart_hidden_size: int = 1024, num_soft_tokens: int = 16):
         """
-        Initialize ExplanationProxy network.
+        Instantiate the proxy MLP.
 
-        Args:
-            bart_hidden_size: Hidden size of the target BART model
-                             (1024 for bart-large, 768 for bart-base)
-            num_soft_tokens: Number of proxy-predicted encoder tokens.
+        bart_hidden_size should match the target BART variant (1024 for bart-large,
+        768 for bart-base). num_soft_tokens controls the length of the predicted
+        encoder memory sequence fed to the BART decoder's cross-attention.
         """
         super().__init__()
 
         self.bart_hidden_size = bart_hidden_size
         self.num_soft_tokens = num_soft_tokens
 
-        # Layer 1: Linear + LayerNorm + GELU
         self.layer1 = nn.Linear(1536, 1024)
         self.ln1 = nn.LayerNorm(1024)
         self.act1 = nn.GELU()
 
-        # Layer 2: Linear + LayerNorm + GELU
         self.layer2 = nn.Linear(1024, 1024)
         self.ln2 = nn.LayerNorm(1024)
         self.act2 = nn.GELU()
 
-        # Layer 3: Linear to a short encoder-memory sequence.
+        # Project to a flat vector then reshape to the target encoder-memory shape.
         self.layer3 = nn.Linear(1024, num_soft_tokens * bart_hidden_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Input tensor [B, 1536]
-
-        Returns:
-            Output tensor [B, num_soft_tokens, bart_hidden_size]
-        """
-        # Layer 1
-        x = self.layer1(x)
-        x = self.ln1(x)
-        x = self.act1(x)
-
-        # Layer 2
-        x = self.layer2(x)
-        x = self.ln2(x)
-        x = self.act2(x)
-
-        # Layer 3
+        """Map CLIP embeddings [B, 1536] to soft encoder tokens [B, num_soft_tokens, bart_hidden_size]."""
+        x = self.act1(self.ln1(self.layer1(x)))
+        x = self.act2(self.ln2(self.layer2(x)))
         x = self.layer3(x)
         x = x.view(x.shape[0], self.num_soft_tokens, self.bart_hidden_size)
-
         return x
 
 
 class ExplanationProxyTrainer:
-    """Trainer for the ExplanationProxy network."""
+    """
+    Orchestrates feature extraction and MSE training of the ExplanationProxy network.
+
+    Wraps a frozen MemeRewriter (for BART target extraction) and a frozen CLIP model
+    (for input feature extraction). The proxy itself is the only trainable component.
+    """
 
     def __init__(
         self,
@@ -91,14 +96,10 @@ class ExplanationProxyTrainer:
         task_prefix: str = "",
     ):
         """
-        Initialize ExplanationProxyTrainer.
+        Load CLIP and initialise the proxy; rewriter must already have its BART model loaded.
 
-        Args:
-            rewriter: MemeRewriter instance for getting BART hidden states
-            clip_model_name: HuggingFace model identifier for CLIP
-            device: Device to run on ('cuda', 'cpu'). Auto-detected if None.
-            input_format: Prompt format used for the BART full-condition targets.
-            task_prefix: Optional prefix prepended to the target prompts.
+        input_format and task_prefix are forwarded to MemeRewriter.format_input() when
+        constructing the full-condition BART encoder inputs used as regression targets.
         """
         self.rewriter = rewriter
         self.clip_model_name = clip_model_name
@@ -108,7 +109,8 @@ class ExplanationProxyTrainer:
         self.input_format = input_format
         self.task_prefix = task_prefix
 
-        # Load CLIP (must use clip-vit-large-patch14: 768-dim embeds → 1536 concat)
+        # clip-vit-large-patch14 produces 768-dim embeddings; concatenating image+text
+        # yields the 1536-dim proxy input. Changing this model invalidates saved checkpoints.
         logger.info(f"Loading CLIP model {clip_model_name}...")
         self.clip_model = CLIPModel.from_pretrained(
             clip_model_name, cache_dir=cache_dir
@@ -118,7 +120,7 @@ class ExplanationProxyTrainer:
         )
         self.clip_model.eval()
 
-        # Initialize proxy network
+        # Fall back to bart-large hidden size if the rewriter hasn't been loaded yet.
         bart_hidden_size = rewriter.hidden_size or 1024
         self.proxy = ExplanationProxy(
             bart_hidden_size=bart_hidden_size,
@@ -130,6 +132,8 @@ class ExplanationProxyTrainer:
             f"with {num_soft_tokens} soft tokens"
         )
 
+    # ── Feature extraction ────────────────────────────────────────────────────
+
     def extract_clip_features(
         self,
         images: List,
@@ -137,14 +141,10 @@ class ExplanationProxyTrainer:
         batch_size: int = 16,
     ) -> torch.Tensor:
         """
-        Extract and concatenate CLIP image + text embeddings.
+        Extract L2-normalised CLIP image and text embeddings and concatenate them to [N, 1536].
 
-        Args:
-            images: List of PIL Images or image paths
-            texts: List of text strings
-
-        Returns:
-            Tensor of shape [N, 1536] with concatenated embeddings
+        Accepts either PIL Images or file path strings; processes in mini-batches to
+        avoid OOM on large datasets. Results are returned on CPU as float32.
         """
         if len(images) != len(texts):
             raise ValueError(
@@ -188,8 +188,7 @@ class ExplanationProxyTrainer:
                 text_embeds = outputs.text_embeds    # [B, 768]
                 combined = torch.cat([image_embeds, text_embeds], dim=1)  # [B, 1536]
 
-            # Keep extracted features on CPU as float32 to reduce peak GPU memory
-            # and avoid dtype mismatches during proxy training.
+            # Detach and move to CPU immediately to cap peak GPU memory across batches.
             all_features.append(combined.detach().float().cpu())
 
             del inputs, outputs, image_embeds, text_embeds, combined
@@ -198,15 +197,12 @@ class ExplanationProxyTrainer:
 
     def _pool_encoder_sequence(self, hidden: torch.Tensor) -> torch.Tensor:
         """
-        Compress a variable-length BART encoder sequence to fixed K soft tokens.
+        Downsample a variable-length encoder sequence to exactly num_soft_tokens positions.
 
-        Args:
-            hidden: [1, seq_len, hidden_size]
-
-        Returns:
-            [1, num_soft_tokens, hidden_size]
+        Adaptive average pooling is used so that training targets always match the
+        fixed proxy output length regardless of the input token count.
         """
-        # Adaptive average pooling expects [B, C, T].
+        # adaptive_avg_pool1d operates on [B, C, T]; transpose seq and hidden dims.
         pooled = torch.nn.functional.adaptive_avg_pool1d(
             hidden.transpose(1, 2),
             self.num_soft_tokens,
@@ -221,16 +217,10 @@ class ExplanationProxyTrainer:
         implicit_meanings: List[Optional[str]],
     ) -> torch.Tensor:
         """
-        Extract BART encoder hidden states as training targets.
+        Run the BART encoder on full-condition inputs and pool each output to num_soft_tokens.
 
-        Args:
-            texts: List of original texts
-            target_groups: List of target groups
-            visual_evidences: List of visual evidence cues
-            implicit_meanings: List of implicit meanings
-
-        Returns:
-            Tensor of shape [N, num_soft_tokens, bart_hidden_size] with encoder-memory targets.
+        Returns a CPU float32 tensor of shape [N, num_soft_tokens, bart_hidden_size] for use
+        as MSE regression targets during proxy training.
         """
         if self.rewriter.model is None:
             self.rewriter.load_model()
@@ -267,10 +257,12 @@ class ExplanationProxyTrainer:
                     self._pool_encoder_sequence(encoder_outputs.last_hidden_state)
                 )
 
-        # Stack along batch dimension and normalize to float32 on CPU for stable MSE training.
+        # Concatenate along the batch dimension; float32 on CPU matches extract_clip_features output.
         targets = torch.cat(target_sequences, dim=0).detach().float().cpu()
 
         return targets
+
+    # ── Training & evaluation ─────────────────────────────────────────────────
 
     def train(
         self,
@@ -290,26 +282,13 @@ class ExplanationProxyTrainer:
         save_dir: Optional[str] = None,
     ) -> Dict[str, List[float]]:
         """
-        Train the ExplanationProxy network.
+        Train the ExplanationProxy with MSE loss against BART encoder targets.
 
-        Args:
-            images: List of training images
-            texts: List of training texts
-            target_groups: List of training target groups
-            visual_evidences: List of training visual evidence cues
-            implicit_meanings: List of training implicit meanings
-            val_images: List of validation images (optional)
-            val_texts: List of validation texts (optional)
-            val_target_groups: List of validation target groups (optional)
-            val_visual_evidences: List of validation visual evidence cues (optional)
-            val_implicit_meanings: List of validation implicit meanings (optional)
-            num_epochs: Number of training epochs
-            batch_size: Batch size
-            learning_rate: Learning rate for Adam optimizer
-            save_dir: Directory to save best checkpoint
+        Features and targets are extracted once before the loop to avoid redundant
+        forward passes. The best validation checkpoint is saved to save_dir/best_proxy.pt
+        when a validation set is provided.
 
-        Returns:
-            Dictionary with training history (loss curves)
+        Returns a history dict with train_loss, val_loss (if applicable), and num_soft_tokens.
         """
         logger.info("Extracting training features...")
         clip_batch_size = min(max(batch_size, 1), 16)
@@ -336,7 +315,6 @@ class ExplanationProxyTrainer:
                 val_texts, val_target_groups, val_visual_evidences, val_implicit_meanings
             )
 
-        # Create dataloaders
         train_dataset = torch.utils.data.TensorDataset(
             train_features, train_targets
         )
@@ -346,11 +324,9 @@ class ExplanationProxyTrainer:
             shuffle=True,
         )
 
-        # Setup optimizer and loss
         optimizer = Adam(self.proxy.parameters(), lr=learning_rate)
         loss_fn = nn.MSELoss()
 
-        # Training loop
         history = {
             "train_loss": [],
             "val_loss": [],
@@ -377,7 +353,6 @@ class ExplanationProxyTrainer:
             train_loss /= len(train_loader)
             history["train_loss"].append(train_loss)
 
-            # Validation
             if has_val:
                 val_loss = 0.0
                 self.proxy.eval()
@@ -394,7 +369,6 @@ class ExplanationProxyTrainer:
                     f"train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
                 )
 
-                # Save best checkpoint
                 if save_dir and val_loss < best_val_loss:
                     best_val_loss = val_loss
                     save_path = Path(save_dir) / "best_proxy.pt"
@@ -418,26 +392,13 @@ class ExplanationProxyTrainer:
         visual_evidences: List[Optional[str]],
         implicit_meanings: List[Optional[str]],
     ) -> Dict[str, float]:
-        """
-        Evaluate the ExplanationProxy on a dataset.
-
-        Args:
-            images: List of evaluation images
-            texts: List of evaluation texts
-            target_groups: List of target groups
-            visual_evidences: List of visual evidence cues
-            implicit_meanings: List of implicit meanings
-
-        Returns:
-            Dictionary with evaluation metrics
-        """
+        """Compute MSE between proxy predictions and BART encoder targets on a held-out set."""
         logger.info("Extracting evaluation features...")
         features = self.extract_clip_features(images, texts, batch_size=16)
         targets = self.extract_bart_targets(
             texts, target_groups, visual_evidences, implicit_meanings
         )
 
-        # Evaluation
         loss_fn = nn.MSELoss()
         self.proxy.eval()
 
@@ -460,7 +421,7 @@ class ExplanationProxyTrainer:
         return results
 
     def load_checkpoint(self, checkpoint_path: str) -> None:
-        """Load proxy network weights from checkpoint."""
+        """Load a saved proxy state dict from checkpoint_path; no-op with warning if path is absent."""
         path = Path(checkpoint_path)
         if not path.exists():
             logger.warning(f"Checkpoint not found: {checkpoint_path}")

@@ -1,19 +1,30 @@
 """
-Evaluate LLaVA teacher rewrites, non-finetuned BART, and finetuned BART outputs.
+Multi-system evaluation harness for hateful meme detoxification.
 
-Expected systems:
-  - LLaVA: Stage 1 pseudo-rewrite JSONL (`pseudo_rewrite` field)
-  - BART base: outputs from inference/run_stage2.py using facebook/bart-large
-  - BART finetuned: outputs from inference/run_stage2.py using LoRA-merged checkpoints
+Compares the LLaVA teacher, non-finetuned BART, LoRA-finetuned BART, the
+CLIP-proxy reranker pipeline, and the DetoxLLM text-only baseline.
 
-Metrics:
-  - Text STA: non-toxic probability from s-nlp/roberta_toxicity_classifier
-  - Text STA delta: rewrite text STA - original text STA
-  - SIM: BERTScore F1 between original and rewrite
-  - CLIPScore: image/rewrite alignment
-  - VisualBERT multimodal toxicity: image + rewrite text hate probability
-  - VisualBERT multimodal STA: fraction predicted non-hateful
-  - VisualBERT hate drop: original hate probability - rewrite hate probability
+Systems
+-------
+  llava_teacher       — Stage 1 pseudo-rewrite JSONL (target_text field).
+  bart_base           — inference/run_stage2.py with facebook/bart-large.
+  bart_finetuned      — inference/run_stage2.py with a LoRA-merged checkpoint.
+  clip_proxy_bart_*   — inference/run_proxy_pipeline.py outputs.
+  detoxllm            — baselines/run_detoxllm_baseline.py outputs.
+
+Metrics computed per system
+----------------------------
+  text_sta       — mean P(non-toxic) from s-nlp/roberta_toxicity_classifier.
+  text_sta_delta — text_sta(rewrite) − text_sta(original).
+  sim            — BERTScore F1 (roberta-large, rescaled) between original
+                   and rewrite text.
+  clip           — normalised cosine similarity between image and rewrite
+                   text via openai/clip-vit-large-patch14.
+
+Outputs written to --output_dir:
+    evaluation_results.json  — full per-system metric dicts.
+    evaluation_summary.json  — compact summary dicts.
+    evaluation_summary.tsv   — tab-separated summary table.
 """
 
 import argparse
@@ -32,7 +43,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from metrics import (
     compute_clipscore,
-    compute_multimodal_hateness,
     compute_sim,
     compute_sta,
 )
@@ -41,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(output_dir: Path, debug: bool = False) -> None:
+    """Configure root logger to write to both a file and stderr."""
     output_dir.mkdir(parents=True, exist_ok=True)
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
@@ -54,6 +65,7 @@ def setup_logging(output_dir: Path, debug: bool = False) -> None:
 
 
 def _first_existing_jsonl(output_dir: Path) -> Optional[Path]:
+    """Return the first JSONL file found under output_dir, or output_dir itself if it is a JSONL file."""
     if output_dir.is_file() and output_dir.suffix == ".jsonl":
         return output_dir
     if not output_dir.exists():
@@ -72,6 +84,7 @@ def _first_existing_jsonl(output_dir: Path) -> Optional[Path]:
 
 
 def _condition_from_path(path: Path) -> str:
+    """Infer the conditioning variant (full/target_only/visual_only/none) from a JSONL path."""
     name = path.stem
     if name.startswith("stage2_rewrites_"):
         return name.replace("stage2_rewrites_", "")
@@ -118,7 +131,11 @@ def _extract_record(raw: Dict[str, Any], fallback_system: str) -> Optional[Dict[
 
 
 def load_validation_teacher_records(path: Path, max_examples: Optional[int]) -> List[Dict[str, Any]]:
-    """Load Stage 2 validation rows as the LLaVA-teacher/reference system."""
+    """
+    Load Stage 2 validation JSONL as the LLaVA teacher / pseudo-rewrite reference system.
+
+    Uses target_text as the rewrite field; falls back to pseudo_rewrite if absent.
+    """
     records: List[Dict[str, Any]] = []
     if not path.exists():
         logger.warning("Missing validation JSONL: %s", path)
@@ -200,6 +217,7 @@ def discover_stage2_systems(
     max_examples: Optional[int],
     id_filter: Optional[set] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
+    """Scan output directories for Stage 2 JSONL files; label each by inferred condition."""
     systems: Dict[str, List[Dict[str, Any]]] = {}
     for output_dir in dirs:
         jsonl_path = _first_existing_jsonl(output_dir)
@@ -223,6 +241,7 @@ def discover_named_systems(
     max_examples: Optional[int],
     id_filter: Optional[set] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
+    """Scan output directories for named-system JSONL files (e.g. proxy pipeline outputs)."""
     systems: Dict[str, List[Dict[str, Any]]] = {}
     for output_dir in dirs:
         jsonl_path = _first_existing_jsonl(output_dir)
@@ -245,6 +264,7 @@ def discover_named_systems(
 
 
 def valid_image_pairs(records: List[Dict[str, Any]], text_key: str) -> Tuple[List[str], List[str]]:
+    """Return (image_paths, texts) for records whose image_path resolves to an existing file."""
     images: List[str] = []
     texts: List[str] = []
     for rec in records:
@@ -260,8 +280,13 @@ def evaluate_system(
     records: List[Dict[str, Any]],
     hf_cache: Optional[str],
     compute_clip: bool,
-    compute_visualbert: bool,
 ) -> Dict[str, Any]:
+    """
+    Run all enabled metrics on a single system's records; return a result dict.
+
+    Text STA and BERTScore SIM are always computed. CLIPScore is skipped when
+    --skip_clipscore is set or no valid image-text pairs are available.
+    """
     logger.info("=" * 80)
     logger.info("Evaluating %s (%d examples)", system_name, len(records))
     logger.info("=" * 80)
@@ -278,6 +303,7 @@ def evaluate_system(
         result["error"] = "no_records"
         return result
 
+    # Text-only STA: score both original and rewrite so we can report the delta.
     logger.info("Computing text STA for originals and rewrites...")
     original_sta = compute_sta(originals)
     rewrite_sta = compute_sta(rewrites)
@@ -298,54 +324,20 @@ def evaluate_system(
     else:
         result["clip"] = None
 
-    if compute_visualbert and images_for_rewrite:
-        logger.info("Computing VisualBERT multimodal toxicity for originals...")
-        original_mm = compute_multimodal_hateness(
-            images_for_original,
-            original_texts_for_images,
-            hf_cache=hf_cache,
-        )
-        logger.info("Computing VisualBERT multimodal toxicity for rewrites...")
-        rewrite_mm = compute_multimodal_hateness(
-            images_for_rewrite,
-            rewrite_texts_for_images,
-            hf_cache=hf_cache,
-        )
-        result["visualbert_original"] = original_mm
-        result["visualbert_rewrite"] = rewrite_mm
-
-        original_hate = original_mm.get("hate_prob_mean")
-        rewrite_hate = rewrite_mm.get("hate_prob_mean")
-        original_non_hate = original_mm.get("non_hate_prob_mean")
-        rewrite_non_hate = rewrite_mm.get("non_hate_prob_mean")
-        result["visualbert_hate_drop"] = (
-            float(original_hate - rewrite_hate)
-            if original_hate is not None and rewrite_hate is not None
-            else None
-        )
-        result["visualbert_sta_delta"] = (
-            float(rewrite_non_hate - original_non_hate)
-            if original_non_hate is not None and rewrite_non_hate is not None
-            else None
-        )
-    else:
-        result["visualbert_original"] = None
-        result["visualbert_rewrite"] = None
-        result["visualbert_hate_drop"] = None
-        result["visualbert_sta_delta"] = None
-
+    # Stage 1 toxicity drop stored in the JSONL (pre-computed by the pseudo-rewrite
+    # pipeline); reported as a sanity check.
     stage1_drops = [r["toxicity_drop"] for r in records if r.get("toxicity_drop") is not None]
     if stage1_drops:
-        result["stage1_visualbert_toxicity_drop_mean"] = float(np.mean(stage1_drops))
+        result["stage1_toxicity_drop_mean"] = float(np.mean(stage1_drops))
 
     return result
 
 
 def compact_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract the key per-system scalars from a full evaluate_system result dict."""
     text_sta = result.get("text_sta_rewrite") or {}
     sim = result.get("sim") or {}
     clip = result.get("clip") or {}
-    vb_rewrite = result.get("visualbert_rewrite") or {}
     return {
         "system": result.get("system"),
         "n": result.get("num_examples"),
@@ -354,13 +346,11 @@ def compact_summary(result: Dict[str, Any]) -> Dict[str, Any]:
         "text_sta_delta": result.get("text_sta_delta"),
         "sim": sim.get("mean"),
         "clip": clip.get("mean") if clip else None,
-        "visualbert_hate_prob": vb_rewrite.get("hate_prob_mean") if vb_rewrite else None,
-        "visualbert_sta": vb_rewrite.get("non_hate_pred_rate") if vb_rewrite else None,
-        "visualbert_hate_drop": result.get("visualbert_hate_drop"),
     }
 
 
 def write_summary_table(summaries: List[Dict[str, Any]], output_path: Path) -> None:
+    """Write a tab-separated summary table of compact_summary dicts."""
     headers = [
         "system",
         "n",
@@ -369,9 +359,6 @@ def write_summary_table(summaries: List[Dict[str, Any]], output_path: Path) -> N
         "text_sta_delta",
         "sim",
         "clip",
-        "visualbert_hate_prob",
-        "visualbert_sta",
-        "visualbert_hate_drop",
     ]
 
     def fmt(value: Any) -> str:
@@ -420,7 +407,6 @@ def main() -> int:
     parser.add_argument("--hf_cache", type=str, default=None)
     parser.add_argument("--max_examples", type=int, default=None)
     parser.add_argument("--skip_clipscore", action="store_true")
-    parser.add_argument("--skip_visualbert", action="store_true")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible metrics")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -443,6 +429,8 @@ def main() -> int:
     validation_ids = None
     if args.validation_jsonl is not None:
         systems["llava_teacher"] = load_validation_teacher_records(args.validation_jsonl, max_examples)
+        # Build a validation ID set so all other systems are evaluated on the
+        # same examples as the teacher; omit IDs from any system not in this set.
         validation_ids = {
             str(r["id"]) for r in systems["llava_teacher"]
             if r.get("id") is not None
@@ -499,7 +487,6 @@ def main() -> int:
             records=records,
             hf_cache=args.hf_cache,
             compute_clip=not args.skip_clipscore,
-            compute_visualbert=not args.skip_visualbert,
         )
         results.append(result)
 

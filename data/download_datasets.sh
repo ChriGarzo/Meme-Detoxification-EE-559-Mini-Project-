@@ -44,9 +44,4 @@ echo "Do NOT attempt to re-scrape from Twitter."
 echo "Place the downloaded data in: ${OUTPUT_DIR}/mmhs150k/"
 
 echo ""
-echo "=== Dataset 4: ParaDetox ==="
-echo "ParaDetox will be auto-downloaded from HuggingFace during training."
-echo "No manual action needed."
-
-echo ""
 echo "Done! Please ensure all datasets are properly placed before running the pipeline."

@@ -1,5 +1,18 @@
 """
-LLaVA baseline: end-to-end rewriting and structured prompt rewriting.
+LLaVA baseline for hateful meme detoxification.
+
+Two rewriting modes:
+  end_to_end        — LLaVA receives (image, original text) and is prompted to
+                      produce a non-hateful rewrite directly, without explicit
+                      Stage 1 structured analysis.
+  structured_prompt — Stage 1 MemeExplainer produces a structured explanation
+                      (description, visual evidence, offensive keywords, rationale)
+                      which is appended as context before asking LLaVA to rewrite;
+                      this mirrors the teacher pipeline but without a separate
+                      BART stage.
+
+Both modes serve as upper-bound ablations for the full two-stage pipeline,
+showing how much benefit the BART detoxification stage adds over LLaVA alone.
 """
 import argparse
 import json
@@ -21,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(debug: bool = False):
-    """Setup logging configuration."""
+    """Configure root logger level; DEBUG when debug=True."""
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         level=level,
@@ -30,15 +43,15 @@ def setup_logging(debug: bool = False):
 
 
 class LLaVABaseline:
-    """LLaVA baseline for hateful meme text rewriting."""
+    """LLaVA-based meme text rewriter; wraps MemeExplainer for model access."""
 
     def __init__(self, hf_cache: str = None, load_in_4bit: bool = False):
         """
-        Initialize LLaVA baseline.
+        Initialise LLaVA baseline.
 
         Args:
-            hf_cache: Hugging Face cache directory
-            load_in_4bit: Load model in 4-bit quantization
+            hf_cache: Hugging Face model cache directory.
+            load_in_4bit: Enable bitsandbytes 4-bit quantisation to reduce GPU memory.
         """
         self.hf_cache = hf_cache
         self.load_in_4bit = load_in_4bit
@@ -47,7 +60,8 @@ class LLaVABaseline:
             import os
             os.environ["HF_HOME"] = hf_cache
 
-        # Initialize explainer (which uses LLaVA internally)
+        # MemeExplainer holds the loaded LLaVA model; we reuse it directly
+        # to avoid loading the weights twice across both rewriting modes.
         self.explainer = MemeExplainer(
             hf_cache=hf_cache,
             load_in_4bit=load_in_4bit
@@ -55,14 +69,11 @@ class LLaVABaseline:
 
     def rewrite_end_to_end(self, image_path: str, text: str) -> str:
         """
-        End-to-end rewriting: give LLaVA the image+text and ask it to rewrite directly.
+        Prompt LLaVA directly with (image, text) to produce a non-hateful rewrite.
 
-        Args:
-            image_path: Path to meme image
-            text: Original meme text
-
-        Returns:
-            Rewritten text
+        No structured Stage 1 analysis is performed; the model must identify
+        hateful content and neutralise it in a single generation step.
+        Falls back to the original text on generation error.
         """
         prompt = f"""[INST] <image>
 The text in this meme is: '{text}'
@@ -84,7 +95,7 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
                 )[0],
                 skip_special_tokens=True
             )
-            # Extract just the rewritten text part
+            # Llama-style models echo the [/INST] tag; extract only the generated suffix.
             if "[/INST]" in response:
                 rewrite = response.split("[/INST]")[-1].strip()
             else:
@@ -100,21 +111,15 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         text: str
     ) -> str:
         """
-        Structured prompt rewriting: use Stage 1 explanation flow, then ask LLaVA to rewrite.
+        Run Stage 1 MemeExplainer then prompt LLaVA to rewrite with the structured context.
 
-        Args:
-            image_path: Path to meme image
-            text: Original meme text
-
-        Returns:
-            Rewritten text
+        Falls back to the original text on any error.
         """
         try:
-            # Get Stage 1 explanation
             image = Image.open(image_path).convert("RGB")
             explanation = self.explainer.explain(image, text)
 
-            # Build context from explanation
+            # Assemble available explanation fields into a freeform context string.
             context_parts = []
             if explanation.get("description"):
                 context_parts.append(f"Description: {explanation['description']}")
@@ -127,7 +132,6 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
 
             context = "\n".join(context_parts)
 
-            # Now ask LLaVA to rewrite with this context
             prompt = f"""[INST] <image>
 The text in this meme is: '{text}'
 
@@ -168,16 +172,10 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
         batch_size: int = 1
     ) -> List[Dict]:
         """
-        Process a batch of examples.
+        Rewrite a list of (image_path, text) pairs; return records with idx, original_text, rewrite.
 
-        Args:
-            image_paths: List of image paths
-            texts: List of original texts
-            mode: Rewriting mode
-            batch_size: Batch size (for consistency)
-
-        Returns:
-            List of results with keys: idx, original_text, rewrite
+        batch_size is accepted for interface consistency but generation is
+        sequential (LLaVA inference is effectively batch_size=1).
         """
         results = []
         rewrite_fn = (
@@ -197,7 +195,7 @@ Respond with ONLY the rewritten text. No quotes, no explanation, no preamble.
 
 
 def load_stage1_outputs(stage1_file: Path) -> List[Dict]:
-    """Load Stage 1 outputs from JSONL."""
+    """Parse Stage 1 output JSONL; return a list of record dicts."""
     outputs = []
     if not stage1_file.exists():
         logger.warning(f"Stage 1 file not found: {stage1_file}")
@@ -234,12 +232,10 @@ def main():
     setup_logging(debug=args.debug)
     logger.info(f"Starting LLaVA baseline (mode={args.mode})")
 
-    # Set random seeds
     np.random.seed(42)
     torch.manual_seed(42)
     random.seed(42)
 
-    # Load Stage 1 outputs
     stage1_outputs = load_stage1_outputs(args.stage1_outputs)
     logger.info(f"Loaded {len(stage1_outputs)} Stage 1 outputs")
 
@@ -247,7 +243,7 @@ def main():
         stage1_outputs = stage1_outputs[:DEBUG_CONFIG["max_examples"]]
         logger.info(f"DEBUG mode: processing only {len(stage1_outputs)} examples")
 
-    # Extract image paths and texts
+    # Resolve image files; skip entries whose image cannot be found on disk.
     image_paths = []
     texts = []
     for item in stage1_outputs:
@@ -261,13 +257,11 @@ def main():
 
     logger.info(f"Processing {len(image_paths)} examples")
 
-    # Initialize baseline
     baseline = LLaVABaseline(
         hf_cache=args.hf_cache,
         load_in_4bit=args.load_in_4bit
     )
 
-    # Process batch with CO2 tracking
     def run_rewriting():
         return baseline.process_batch(
             image_paths,

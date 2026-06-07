@@ -1,8 +1,19 @@
 """
-Stage 2: BART-based rewriting with conditional control.
+Stage 2 inference: conditioned meme detoxification with fine-tuned BART-large.
 
-Generates final rewrites for all examples using a fine-tuned BART model
-with support for multiple conditioning strategies.
+Pipeline position: AFTER train_stage2.py (per conditioning condition).
+
+Inputs : Stage 1 explanation JSONL (via --stage1_output_dir) or a held-out
+         Stage 2 val/test JSONL (via --input_jsonl, preferred for evaluation).
+Outputs: <output_dir>/stage2_rewrites_<condition>.jsonl
+
+Design decisions:
+- Condition prompt is built by build_condition_prompt, mirroring the format
+  used by train_stage2.py so that training and inference inputs are identical.
+- prompts are passed to MemeRewriter.generate_from_formatted to avoid
+  double-prefixing by the rewriter's internal formatting logic.
+- BART falls back to facebook/bart-large if the fine-tuned checkpoint fails
+  to load (useful for rapid debugging without a checkpoint).
 """
 
 import argparse
@@ -36,7 +47,7 @@ def set_seed(seed: int = 42) -> None:
 
 
 def load_explanation_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
-    """Load examples from Stage 1 explanation JSONL file."""
+    """Load Stage 1 explanation records from a JSONL file."""
     examples = []
     if not os.path.exists(jsonl_path):
         logger.error(f"File not found: {jsonl_path}")
@@ -56,7 +67,7 @@ def load_explanation_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
 
 
 def load_stage2_eval_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
-    """Load Stage 2 train/val JSONL rows and convert them to inference examples."""
+    """Load Stage 2 val/test JSONL and normalise rows to the inference example schema."""
     examples = []
     if not os.path.exists(jsonl_path):
         logger.error(f"Stage 2 eval JSONL not found: {jsonl_path}")
@@ -93,21 +104,15 @@ def load_stage2_eval_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
 
 
 def write_jsonl_batch(data: List[Dict], output_path: str) -> None:
-    """Append batch of examples to JSONL file."""
+    """Append a batch of records to a JSONL file."""
     with open(output_path, "a") as f:
         for item in data:
             f.write(json.dumps(item) + "\n")
 
 
 def discover_explanation_files(stage1_dir: Path) -> List[Path]:
-    """
-    Discover Stage 1 explanation JSONL files.
-
-    Preference order avoids duplicate loading:
-      1) merged files: *_explanations_merged.jsonl
-      2) direct files: *_explanations.jsonl
-      3) sharded files: *_explanations_shard*.jsonl
-    """
+    """Locate Stage 1 explanation JSONL files, preferring merged over sharded to avoid duplicates."""
+    # Priority: 1) merged, 2) direct, 3) sharded, 4) any *explanations*.jsonl.
     merged = sorted(stage1_dir.rglob("*_explanations_merged.jsonl"))
     if merged:
         return merged
@@ -120,7 +125,6 @@ def discover_explanation_files(stage1_dir: Path) -> List[Path]:
     if sharded:
         return sharded
 
-    # Backward/forward-compat fallback if naming changes again.
     return sorted(stage1_dir.rglob("*explanations*.jsonl"))
 
 
@@ -191,7 +195,7 @@ def main():
         "--checkpoint_dir",
         type=str,
         required=True,
-        help="Directory of the fine-tuned BART checkpoint (e.g. /scratch/hmr_stage2_phase2_full_checkpoint)"
+        help="Directory of the fine-tuned BART checkpoint (e.g. /scratch/hmr_stage2_full_checkpoint)"
     )
     parser.add_argument(
         "--condition",
@@ -234,7 +238,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup
     set_seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
     os.environ["HF_HOME"] = args.hf_cache
@@ -251,8 +254,7 @@ def main():
     logger.info(f"Starting Stage 2 with condition={args.condition}, debug={args.debug}")
     logger.info(f"Arguments: {vars(args)}")
 
-    # Load evaluation examples. Prefer an explicit Stage 2 val/test JSONL so
-    # model comparisons are made on a held-out split rather than all Stage 1 rows.
+    # Prefer --input_jsonl (held-out split) for apples-to-apples model comparison.
     if args.input_jsonl:
         examples = load_stage2_eval_jsonl(args.input_jsonl)
     else:
@@ -276,12 +278,11 @@ def main():
         examples = examples[:16]
     logger.info(f"Processing {len(examples)} examples")
 
-    # Initialize BART model
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
 
     if args.debug:
-        # Use bart-base for debug mode
+        # bart-base is much smaller; avoids downloading the full checkpoint during debugging.
         model_name = "facebook/bart-base"
         logger.info("Using bart-base for debug mode")
     else:
@@ -308,13 +309,12 @@ def main():
         )
         rewriter.load_model()
 
-    # Prepare output path
     output_path = os.path.join(args.output_dir, f"stage2_rewrites_{args.condition}.jsonl")
     if os.path.exists(output_path):
         logger.info(f"Removing existing rewrite output before regeneration: {output_path}")
         os.remove(output_path)
 
-    # Process examples
+    # ── Inference loop ────────────────────────────────────────────────────────
     batch_texts = []
     batch_prompts = []
     batch_original = []
@@ -358,8 +358,8 @@ def main():
                 # Process batch
                 if len(batch_texts) >= args.batch_size or (idx == len(examples) - 1 and batch_texts):
                     try:
-                        # prompts are already fully formatted by build_condition_prompt;
-                        # use generate_from_formatted to avoid double-prefixing
+                        # Prompts are already formatted; generate_from_formatted bypasses
+                        # the rewriter's internal condition-prefixing to avoid double-prefixing.
                         rewrites = rewriter.generate_from_formatted(
                             batch_prompts,
                             max_length=args.max_length,

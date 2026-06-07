@@ -1,3 +1,27 @@
+"""
+rewriter.py — Student model (BART-LoRA) for the hateful meme detoxification pipeline.
+
+MemeRewriter wraps facebook/bart-large (or bart-base) for explanation-conditioned
+sequence-to-sequence text detoxification. It serves two roles:
+
+  1. Inference: format_input() prepends structured explanation tokens to the raw meme
+     text, and generate() / batch_rewrite() produce non-hateful rewrites.
+  2. Feature extraction: get_encoder_hidden_state() exposes the mean-pooled BART
+     encoder representation, which is used as the regression target for training the
+     CLIP-based ExplanationProxy (proxy.py).
+
+Input format (legacy): "[T: {target_group}] [V: {visual_evidence}] [M: {implicit_meaning}] | {text}"
+Input format (explicit_detox): natural-language task description prepended to context and text.
+
+Design decisions:
+  - Lazy model loading (load_model on first use) allows the object to be constructed
+    before GPU memory is available.
+  - generate_from_formatted() bypasses format_input() for callers that pre-build the
+    encoder string (e.g., the RL/RLHF training loop).
+  - decode_from_hidden_state() accepts a synthetic encoder state, enabling the proxy
+    to drive BART decoding at inference without a text input.
+"""
+
 import logging
 import torch
 import torch.nn as nn
@@ -15,7 +39,9 @@ logger = logging.getLogger(__name__)
 
 
 class MemeRewriter:
-    """BART wrapper for text detoxification with explanation-aware formatting."""
+    """BART student model: explanation-conditioned seq2seq detoxification of meme text."""
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def __init__(
         self,
@@ -27,13 +53,9 @@ class MemeRewriter:
         debug: bool = False,
     ):
         """
-        Initialize the MemeRewriter.
+        Defer model loading; store configuration for lazy initialisation via load_model().
 
-        Args:
-            model_name: HuggingFace model identifier ('facebook/bart-large' or 'facebook/bart-base')
-            checkpoint_path: Path to a saved checkpoint to load from
-            device: Device to run on ('cuda', 'cpu'). Auto-detected if None.
-            debug: Debug mode (uses bart-base instead of bart-large)
+        debug substitutes bart-base for bart-large to reduce memory during development.
         """
         if debug:
             model_name = "facebook/bart-base"
@@ -50,7 +72,7 @@ class MemeRewriter:
         logger.info(f"MemeRewriter initialized with device: {self.device}")
 
     def load_model(self) -> None:
-        """Load the BART model and tokenizer."""
+        """Load the BART tokenizer and model weights; apply checkpoint if checkpoint_path is set."""
         logger.info(f"Loading model {self.model_name}...")
 
         self.tokenizer = BartTokenizer.from_pretrained(
@@ -60,7 +82,7 @@ class MemeRewriter:
             self.model_name, cache_dir=self.cache_dir
         ).to(self.device)
 
-        # Determine hidden size
+        # BartConfig exposes d_model; generic HF configs use hidden_size.
         if isinstance(self.model.config, BartConfig):
             self.hidden_size = self.model.config.d_model
         else:
@@ -68,14 +90,15 @@ class MemeRewriter:
 
         logger.info(f"Model hidden size: {self.hidden_size}")
 
-        # Load checkpoint if provided
         if self.checkpoint_path:
             self._load_checkpoint(self.checkpoint_path)
 
         logger.info("Model loaded successfully")
 
+    # ── Internal utilities ────────────────────────────────────────────────────
+
     def _load_checkpoint(self, checkpoint_path: str) -> None:
-        """Load model weights from checkpoint."""
+        """Load a state dict from checkpoint_path into the BART model; no-op with warning if path absent."""
         path = Path(checkpoint_path)
         if not path.exists():
             logger.warning(f"Checkpoint not found: {checkpoint_path}")
@@ -84,6 +107,8 @@ class MemeRewriter:
         logger.info(f"Loading checkpoint from {checkpoint_path}")
         state_dict = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(state_dict)
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def format_input(
         self,
@@ -96,21 +121,12 @@ class MemeRewriter:
         task_prefix: str = "",
     ) -> str:
         """
-        Format input text with explanation prefix tokens.
+        Assemble the BART encoder input string from meme text and explanation fields.
 
-        Args:
-            text: Original meme text
-            target_group: Target group (or None)
-            visual_evidence: Visual evidence cue (or None)
-            implicit_meaning: Implicit meaning (or None)
-            mode: Formatting mode:
-                - 'full': include all fields
-                - 'target_only': include only target_group
-                - 'visual_only': include only visual_evidence
-                - 'none': all fields as null
-
-        Returns:
-            Formatted input string for BART
+        mode controls which explanation fields are populated vs. replaced with "null",
+        supporting ablation experiments. input_format selects between the compact
+        bracket notation (legacy) and a natural-language task description (explicit_detox).
+        task_prefix is prepended verbatim when set (e.g. for task-specific fine-tuning signals).
         """
         if mode == "full":
             tg = target_group or "null"
@@ -156,20 +172,7 @@ class MemeRewriter:
         task_prefix: str = "",
         max_length: int = 150,
     ) -> str:
-        """
-        Generate a detoxified rewrite of input text.
-
-        Args:
-            text: Original text
-            target_group: Target group from explanation
-            visual_evidence: Visual evidence from explanation
-            implicit_meaning: Implicit meaning from explanation
-            mode: Explanation prefix mode
-            max_length: Maximum length of generated text
-
-        Returns:
-            Rewritten text
-        """
+        """Generate a single detoxified rewrite using greedy beam search (do_sample=False)."""
         if self.model is None:
             self.load_model()
 
@@ -218,24 +221,11 @@ class MemeRewriter:
         task_prefix: str = "",
         max_length: int = 150,
     ) -> List[str]:
-        """
-        Generate rewrites for a batch of texts.
-
-        Args:
-            texts: List of original texts
-            target_groups: List of target groups (or None for each)
-            visual_evidences: List of visual evidence cues (or None for each)
-            implicit_meanings: List of implicit meanings (or None for each)
-            mode: Explanation prefix mode
-            max_length: Maximum length of generated texts
-
-        Returns:
-            List of rewritten texts
-        """
+        """Generate detoxified rewrites for a list of texts; errors per example are replaced with a sentinel string."""
         if self.model is None:
             self.load_model()
 
-        # Handle None inputs
+        # Default None lists to per-example None, preserving the single-example code path.
         target_groups = target_groups or [None] * len(texts)
         visual_evidences = visual_evidences or [None] * len(texts)
         implicit_meanings = implicit_meanings or [None] * len(texts)
@@ -273,17 +263,10 @@ class MemeRewriter:
         task_prefix: str = "",
     ) -> torch.Tensor:
         """
-        Extract mean-pooled encoder hidden state from BART.
+        Return the mean-pooled BART encoder representation for the formatted input.
 
-        Args:
-            text: Input text
-            target_group: Target group from explanation
-            visual_evidence: Visual evidence from explanation
-            implicit_meaning: Implicit meaning from explanation
-            mode: Explanation prefix mode
-
-        Returns:
-            Tensor of shape [1, hidden_size] with mean-pooled encoder output
+        Output shape: [1, hidden_size]. Used by ExplanationProxyTrainer.extract_bart_targets()
+        to build regression targets for the proxy network.
         """
         if self.model is None:
             self.load_model()
@@ -306,7 +289,7 @@ class MemeRewriter:
         ).to(self.device)
 
         with torch.no_grad():
-            # Transformers versions expose the encoder through different attributes.
+            # Encoder access varies across Transformers versions and model wrappers.
             if hasattr(self.model, "get_encoder"):
                 encoder = self.model.get_encoder()
             elif hasattr(self.model, "encoder"):
@@ -322,10 +305,9 @@ class MemeRewriter:
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
-            # encoder_outputs[0] has shape [batch_size, seq_len, hidden_size]
-            last_hidden_state = encoder_outputs.last_hidden_state
-
-            # Mean pooling over sequence dimension, keeping batch dim
+            last_hidden_state = encoder_outputs.last_hidden_state  # [B, seq_len, H]
+            # Mean pooling collapses variable-length sequences to a fixed-size vector
+            # suitable for MSE regression against the proxy output.
             hidden_state = last_hidden_state.mean(dim=1)  # [1, hidden_size]
 
         return hidden_state
@@ -390,19 +372,17 @@ class MemeRewriter:
         max_length: int = 150,
     ) -> str:
         """
-        Decode text from an injected encoder hidden state.
+        Decode text by injecting a synthetic encoder state, bypassing the text encoder entirely.
 
-        Args:
-            hidden_state: Tensor of shape [1, hidden_size] or [batch_size, hidden_size]
-            max_length: Maximum length of generated text
-
-        Returns:
-            Decoded text string
+        hidden_state is expected to be [1, hidden_size] or [batch_size, hidden_size] as
+        produced by ExplanationProxy.forward(); it is expanded to [B, 1, H] to match the
+        shape expected by BART's cross-attention.
         """
         if self.model is None:
             self.load_model()
 
-        # Create encoder outputs object
+        # Wrap the raw tensor in a minimal namespace that satisfies BART's decoder
+        # cross-attention interface without instantiating a full BaseModelOutput.
         encoder_outputs = type(
             "EncoderOutputs",
             (),

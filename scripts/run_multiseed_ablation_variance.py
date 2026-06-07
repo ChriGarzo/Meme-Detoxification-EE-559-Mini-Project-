@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Run and aggregate multi-seed BART/proxy ablation experiments.
+"""Orchestrate multi-seed BART/proxy ablation experiments and aggregate variance.
 
-This script is intentionally an orchestrator: it calls the existing training,
-inference, and evaluation entrypoints with seed-specific output directories.
-The default held-out split is ``/scratch/stages/hmr_stage2_dataset/test.jsonl``.
+This script delegates to existing entrypoints (train_stage2.py, train_proxy.py,
+run_stage2.py, run_proxy_pipeline.py, evaluate.py) with seed-specific output
+directories, then aggregates evaluation_summary.json files to compute per-metric
+mean and sample variance across seeds.
+
+Default held-out split: /scratch/stages/hmr_stage2_dataset/test.jsonl
+
+Subcommands:
+  train-bart      Train one BART condition for one seed.
+  train-seed      Train all conditions + proxy for one seed.
+  train-proxy     Train proxy for one seed using that seed's full-condition BART.
+  evaluate-seed   Run inference and evaluation for one seed.
+  seed-pipeline   Full per-seed train + optional evaluate.
+  aggregate       Aggregate per-seed evaluation_summary.json files.
 """
 
 from __future__ import annotations
@@ -26,9 +37,6 @@ METRIC_KEYS = [
     "text_sta_delta",
     "sim",
     "clip",
-    "visualbert_hate_prob",
-    "visualbert_sta",
-    "visualbert_hate_drop",
 ]
 
 
@@ -48,7 +56,11 @@ def run_logged(
     env: Optional[Dict[str, str]] = None,
     dry_run: bool = False,
 ) -> None:
-    """Run a subprocess while teeing stdout/stderr to a log file."""
+    """Execute cmd as a subprocess, teeing merged stdout/stderr to log_path.
+
+    Raises RuntimeError on non-zero exit to propagate failures to the orchestrator.
+    dry_run prints the command and returns without executing.
+    """
     cmd_text = as_cmd_text(cmd)
     print(f"\n[command] {cmd_text}")
     print(f"[log]     {log_path}")
@@ -108,7 +120,7 @@ def seed_eval_root(args: argparse.Namespace, seed: int) -> Path:
 def checkpoint_dir(args: argparse.Namespace, seed: int, condition: str) -> Path:
     return (
         seed_stage_root(args, seed)
-        / f"hmr_stage2_phase2_{condition}{args.output_suffix}_checkpoint"
+        / f"hmr_stage2_{condition}{args.output_suffix}_checkpoint"
     )
 
 
@@ -141,6 +153,7 @@ def aggregate_dir(args: argparse.Namespace) -> Path:
 
 
 def count_jsonl(path: Path) -> int:
+    """Return the number of non-empty lines in a JSONL file, or -1 if absent."""
     if not path.exists():
         return -1
     with path.open("r", encoding="utf-8", errors="replace") as f:
@@ -148,6 +161,7 @@ def count_jsonl(path: Path) -> int:
 
 
 def output_complete(path: Path, expected_count: int) -> bool:
+    """Return True if path exists and contains exactly expected_count lines."""
     return expected_count > 0 and count_jsonl(path) == expected_count
 
 
@@ -181,7 +195,7 @@ def train_bart(args: argparse.Namespace, seed: int, condition: str) -> None:
 
     cmd: List[object] = [
         sys.executable,
-        args.repo_root / "training" / "train_stage2_phase2.py",
+        args.repo_root / "training" / "train_stage2.py",
         "--condition",
         condition,
         "--dataset_dir",
@@ -213,10 +227,7 @@ def train_bart(args: argparse.Namespace, seed: int, condition: str) -> None:
         "--seed",
         seed,
     ]
-    if args.phase1_checkpoint_dir:
-        cmd.extend(["--phase1_checkpoint_dir", args.phase1_checkpoint_dir])
-    else:
-        cmd.extend(["--base_model", args.base_model])
+    cmd.extend(["--base_model", args.base_model])
     cmd.extend(maybe_task_prefix_args(args))
     cmd.extend(maybe_debug_arg(args))
 
@@ -500,8 +511,6 @@ def evaluate_seed(args: argparse.Namespace, seed: int) -> None:
         cmd.extend(["--detoxllm_output_path", detoxllm_dir])
     if args.skip_clipscore:
         cmd.append("--skip_clipscore")
-    if args.skip_visualbert:
-        cmd.append("--skip_visualbert")
     cmd.extend(maybe_debug_arg(args))
 
     run_logged(
@@ -528,6 +537,10 @@ def read_summary(path: Path) -> List[Dict[str, Any]]:
 
 
 def numeric_value(value: Any) -> Optional[float]:
+    """Cast value to float for metric aggregation; returns None for booleans and non-numerics.
+
+    Booleans are excluded explicitly because isinstance(True, int) is True in Python.
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -661,7 +674,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 def add_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base_model", default="facebook/bart-large")
-    parser.add_argument("--phase1_checkpoint_dir", type=Path, default=None)
     parser.add_argument("--num_train_epochs", type=int, default=5)
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -695,7 +707,6 @@ def add_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--baseline_seed", type=int, default=42)
     parser.add_argument("--skip_proxy", action="store_true")
     parser.add_argument("--skip_clipscore", action="store_true")
-    parser.add_argument("--skip_visualbert", action="store_true")
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -1,35 +1,25 @@
 """
-Build unified stratified train/val/test splits across all three datasets.
+Post-Stage-0 pipeline step: build unified 80/10/10 stratified splits.
 
-Combines:
-  - HarMeme  (di-dimitrov/mmf):   COVID-19 harmful memes
-  - MAMI     (SemEval-2022 Task 5): Misogynous memes
-  - MMHS150K (Gomez et al. 2020):  Multi-modal hate speech from Twitter
+Data sources  : Stage 0 manifests (per-dataset `kept` flags) + raw annotation
+                files for HarMeme (di-dimitrov/mmf), MAMI (SemEval-2022 Task 5),
+                and MMHS150K (Gomez et al. 2020).
+Output        : /scratch/hmr_data/unified_splits/
+                    unified_train.csv, unified_val.csv, unified_test.csv,
+                    split_stats.json
+                Each row: id, image_path, dataset, text, hateful,
+                          original_label, split.
 
-Pipeline order
+Design choices
 --------------
-Run AFTER Stage 0 (filter_meme_images.py) has completed for all three datasets.
-Stage 0 produces per-dataset manifests:
-    /scratch/hmr_data/harmeme/manifest.csv
-    /scratch/hmr_data/mami/manifest.csv
-    /scratch/hmr_data/mmhs150k/manifest.csv
-
-Each manifest has a `kept` column (True/False) based on OCR + CLIP filtering.
-This script loads the raw annotations for labels, then restricts to Stage-0-kept
-images before creating the stratified splits.
-
-Split strategy: 80 / 10 / 10  (train / val / test)
-  Stratified by (dataset, hateful) group so every split has proportional
-  representation of hateful and non-hateful memes from every dataset.
-
-Output: /scratch/hmr_data/unified_splits/
-    unified_train.csv
-    unified_val.csv
-    unified_test.csv
-    split_stats.json
-
-Each row in the output CSVs:
-    id, image_path, dataset, text, hateful, original_label, split
+- Stage 0 manifests restrict the labeled pool to images that passed the OCR +
+  CLIP filter; unannotated or visually non-meme images are excluded before
+  splitting, ensuring training and evaluation data contain genuine meme images.
+- Stratification is performed jointly over (dataset, hateful) groups so every
+  split maintains proportional representation of hateful and non-hateful memes
+  from all three source datasets.
+- Split ratios: 80 / 10 / 10 (train / val / test), seeded at 42 for
+  reproducibility.
 """
 
 import argparse
@@ -47,16 +37,15 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Stage-0 manifest helpers
-# ---------------------------------------------------------------------------
+# ── Stage-0 manifest helpers ───────────────────────────────────────────────
 
 def load_kept_paths(manifest_path: Optional[str]) -> Optional[Set[str]]:
     """
-    Load the set of image paths that passed Stage 0 filtering.
+    Return the set of absolute image paths that passed Stage 0 filtering.
 
-    Returns None if no manifest path is provided (no filtering applied).
-    Exits with error if the manifest path is given but the file doesn't exist.
+    Returns None when no manifest path is given, signalling that the
+    downstream filter should be a no-op. Exits if a path is given but the
+    file does not exist.
     """
     if not manifest_path:
         return None
@@ -81,10 +70,10 @@ def load_kept_paths(manifest_path: Optional[str]) -> Optional[Set[str]]:
 def apply_manifest_filter(examples: List[Dict], kept_paths: Optional[Set[str]],
                            dataset_name: str) -> List[Dict]:
     """
-    Filter examples to only those whose image_path was kept by Stage 0.
+    Retain only examples whose image_path appears in the Stage 0 kept set.
 
-    If kept_paths is None (no manifest provided), all examples pass through
-    with a warning so the user knows filtering was skipped.
+    When kept_paths is None (no manifest provided), all examples pass through
+    and a warning is emitted so the absence of filtering is visible in logs.
     """
     if kept_paths is None:
         logger.warning(
@@ -104,12 +93,10 @@ def apply_manifest_filter(examples: List[Dict], kept_paths: Optional[Set[str]],
     return filtered
 
 
-# ---------------------------------------------------------------------------
-# Dataset loaders  (raw annotations → list of example dicts)
-# ---------------------------------------------------------------------------
+# ── Dataset loaders: raw annotations → list of example dicts ──────────────
 
 def load_harmeme(data_dir: str) -> List[Dict]:
-    """Load HarMeme from di-dimitrov/mmf annotation JSONLs."""
+    """Load and unify HarMeme annotations from di-dimitrov/mmf JSONL splits."""
     data_dir = Path(data_dir)
     ann_dir  = data_dir / "annotations"
     img_dir  = data_dir / "images"
@@ -153,9 +140,12 @@ def load_harmeme(data_dir: str) -> List[Dict]:
 
 def load_mami(data_dir: str) -> List[Dict]:
     """
-    Load MAMI from training folder only (test folder has no gold labels).
-    Annotation file can be .csv or .xlsx; must contain columns:
-        file_name, misogynous, Text Transcription
+    Load MAMI annotations from the training split only.
+
+    The MAMI test split ships without gold labels, so only the training
+    annotation file (CSV or XLSX, containing file_name, misogynous,
+    Text Transcription) is loaded; examples with no misogynous label are
+    dropped.
     """
     data_dir   = Path(data_dir)
     img_dir    = data_dir / "images"
@@ -165,7 +155,7 @@ def load_mami(data_dir: str) -> List[Dict]:
         logger.error(f"MAMI annotations not found at {ann_dir}")
         return []
 
-    # Find annotation file — prefer training file
+    # Prefer any filename containing "train"; fall back to the first CSV/XLSX found.
     ann_file = None
     for candidate in sorted(ann_dir.iterdir()):
         if candidate.suffix in {".csv", ".xlsx", ".xls"}:
@@ -191,7 +181,7 @@ def load_mami(data_dir: str) -> List[Dict]:
     else:
         df = pd.read_excel(ann_file)
 
-    # Normalize column names
+    # Normalise to snake_case so column lookup is uniform across CSV/XLSX variants.
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
     logger.info(f"MAMI annotation columns: {list(df.columns)}")
 
@@ -237,8 +227,11 @@ def load_mami(data_dir: str) -> List[Dict]:
 
 def load_mmhs150k(data_dir: str) -> List[Dict]:
     """
-    Load MMHS150K from MMHS150K_GT.json.
-    Hateful = majority vote: ≥2 of 3 annotators give non-zero label.
+    Load MMHS150K from MMHS150K_GT.json and resolve hateful labels by majority vote.
+
+    An image is marked hateful if at least 2 of 3 annotators assigned a
+    non-zero label; the predominant non-zero label determines the category string.
+    Images whose file is absent on disk are silently skipped.
     """
     data_dir = Path(data_dir)
     img_dir  = data_dir / "images"
@@ -295,9 +288,7 @@ def load_mmhs150k(data_dir: str) -> List[Dict]:
     return examples
 
 
-# ---------------------------------------------------------------------------
-# Stratified split
-# ---------------------------------------------------------------------------
+# ── Stratified split ──────────────────────────────────────────────────────
 
 def stratified_split(
     examples: List[Dict],
@@ -306,7 +297,9 @@ def stratified_split(
     seed: int = 42,
 ) -> Tuple[List[Dict], List[Dict], List[Dict]]:
     """
-    Split examples into train/val/test preserving (dataset, hateful) proportions.
+    Partition examples into train/val/test while preserving (dataset, hateful)
+    proportions; ensures every split has balanced source-dataset and
+    hate-label representation.
     """
     random.seed(seed)
 
@@ -335,9 +328,7 @@ def stratified_split(
     return train, val, test
 
 
-# ---------------------------------------------------------------------------
-# Stats helpers
-# ---------------------------------------------------------------------------
+# ── Statistics helpers ────────────────────────────────────────────────────
 
 def compute_stats(examples: List[Dict], split_name: str) -> Dict:
     stats = {"split": split_name, "total": len(examples), "by_dataset": {}}
@@ -370,20 +361,16 @@ def print_stats(train, val, test):
     print("=" * 70 + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Entry point ───────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
         description="Build unified 80/10/10 stratified splits (run AFTER Stage 0)"
     )
-    # Dataset dirs (for raw annotations + image paths)
     parser.add_argument("--harmeme_dir",  type=str, default="/scratch/hmr_data/harmeme")
     parser.add_argument("--mami_dir",     type=str, default="/scratch/hmr_data/mami")
     parser.add_argument("--mmhs150k_dir", type=str, default="/scratch/hmr_data/mmhs150k")
 
-    # Stage 0 manifests — default to the standard per-dataset paths
     parser.add_argument("--harmeme_manifest",  type=str,
                         default="/scratch/hmr_data/harmeme/manifest.csv",
                         help="Stage 0 manifest for HarMeme")
@@ -423,9 +410,6 @@ def main():
         print(f"  MMHS150K manifest: {args.mmhs150k_manifest}")
     print("=" * 70 + "\n")
 
-    # ------------------------------------------------------------------
-    # Load Stage 0 manifests (set of kept image paths per dataset)
-    # ------------------------------------------------------------------
     if args.skip_manifest_filter:
         harmeme_kept = mami_kept = mmhs_kept = None
     else:
@@ -434,9 +418,6 @@ def main():
         mami_kept    = load_kept_paths(args.mami_manifest)
         mmhs_kept    = load_kept_paths(args.mmhs150k_manifest)
 
-    # ------------------------------------------------------------------
-    # Load raw annotations and apply Stage 0 filter
-    # ------------------------------------------------------------------
     all_examples = []
 
     harmeme = load_harmeme(args.harmeme_dir)
@@ -477,9 +458,6 @@ def main():
         all_examples = all_examples[:300]
         logger.warning(f"DEBUG: truncated to {len(all_examples)} examples")
 
-    # ------------------------------------------------------------------
-    # Stratified split
-    # ------------------------------------------------------------------
     logger.info("\nCreating stratified splits:")
     train, val, test = stratified_split(
         all_examples,
@@ -488,9 +466,6 @@ def main():
         seed=args.seed,
     )
 
-    # ------------------------------------------------------------------
-    # Write outputs
-    # ------------------------------------------------------------------
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
