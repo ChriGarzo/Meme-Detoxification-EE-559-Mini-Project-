@@ -51,7 +51,7 @@ On 280 held-out memes, the full BART student reaches $0.963\pm0.006$ Text
 single reported DetoxLLM-7B baseline at 0.940 and 0.184. The proxy obtains the
 highest BERTScore and CLIPScore ($0.581\pm0.020$, $0.638\pm0.002$), suggesting
 stronger source retention and image alignment, but lower Text \sta{} shows
-weaker toxicity control.
+weaker toxicity control.\\
 \textbf{Keywords:} meme detoxification, multimodal learning, text rewriting,
 distillation, CLIP, BART.
 \end{abstract}
@@ -124,8 +124,7 @@ comparison, while MMHS150K uses a five-prompt rule and keeps an image only if
 the meme prompt is top and has probability at least 0.45. Filtered examples are
 split 80/10/10, stratified by dataset and harmful label.
 
-\textbf{Teacher pseudo-labels.} For each split, LLaVA-NeXT first generates a
-JSON explanation with three fields: target group, visual evidence, and implicit
+\textbf{Teacher pseudo-labels.} For each split, LLaVA-NeXT first generates an explanation with three fields: target group, visual evidence, and implicit
 harmful meaning. A second prompt asks for a short non-hateful rewrite that keeps
 the meme topic and style. Stage 1 records all attempts but marks pass/fail using
 text \sta, BERTScore, and toxicity-drop filters.
@@ -134,13 +133,12 @@ positive toxicity reduction, pass rewrite-quality checks, and have normalized
 source/rewrite similarity at most 0.95. The final supervised data contains
 3,578 train, 269 validation, and 280 held-out test examples.
 
-\textbf{BART student.} The student starts from BART-large and is trained only
-on the meme pseudo-rewrite data, without ParaDetox warm-up.
+\textbf{BART student.} The student starts from BART-large and is trained 
+on the meme pseudo-rewrite data.
 Encoder inputs contain the original text plus optional teacher fields in an
 explicit detoxification instruction. We train four conditions: \texttt{full},
 \texttt{target\_only}, \texttt{visual\_only}, and \texttt{none}. LoRA is applied
-to BART attention projections and feed-forward layers
-(\texttt{q,k,v,out\_proj,fc1,fc2}) with rank 32, alpha 64, dropout 0.05,
+to BART attention projections and feed-forward layers with rank 32, alpha 64, dropout 0.05,
 learning rate $10^{-4}$, batch size 8, warm-up 50 steps, weight decay 0.01, and
 5 epochs. About 17M of roughly 400M parameters are trainable.
 
@@ -149,11 +147,22 @@ concatenated CLIP image and text embeddings (1536 dimensions) and predicts a
 sequence of $K=16$ BART encoder soft tokens of size 1024. During training, the
 target is the pooled encoder memory of the full-condition fine-tuned BART. At
 inference, proxy tokens are concatenated with BART encoder states from a
-text-only null-context prompt, then decoded by the fine-tuned BART decoder. This
+text-only null-context prompt, then decoded by the fine-tuned BART decoder. The architecture is illustrated in Figure~\ref{fig:inference}.
+This
 turns multimodal grounding into a continuous prefix for the decoder rather than
 requiring a textual explanation from a VLM at inference. It is our main
 deployment path because it keeps visual input through CLIP while removing the
 LLaVA teacher and DetoxLLM-sized causal LM from inference.
+
+\begin{figure}[t]
+\vskip 0.08in
+\centering
+\includegraphics[width=1\columnwidth]{../inference.png}
+\caption{Efficient inference path: the proxy maps CLIP meme/text embeddings to
+BART soft encoder tokens for detoxified decoding.}
+\label{fig:inference}
+\vskip -0.12in
+\end{figure}
 
 \section{Data Licensing and Ethics}
 \label{sec:ethics}
@@ -163,8 +172,7 @@ the repository materials. Those materials identify HarMeme and MAMI as CC~4.0
 research datasets; the pipeline downloads HarMeme automatically, documents MAMI
 as a manual-request dataset, and uses MMHS150K through the authors' research
 download links rather than redistributing it. The paper reports aggregate
-metrics and does not reproduce harmful images or captions except through
-sanitized task descriptions.
+metrics and does not reproduce harmful images or captions.
 
 Ethically, detoxification should be read as a harm-reduction tool, not as an
 automatic moderation authority. Rewriting can remove slurs while still
@@ -180,10 +188,8 @@ required.
 All systems are evaluated on the same 280 held-out test examples with the same
 scoring pipeline and exact generated outputs: no manual correction or post-hoc
 sanitization is applied before scoring. Baselines are the fixed LLaVA teacher
-pseudo-rewrites, a single reported DetoxLLM-7B run, and base BART. VisualBERT
-hate probability was also computed, but its non-hateful prediction rate was 0
-for every system, so we do not use it as a main conclusion.
-
+pseudo-rewrites, a single reported DetoxLLM-7B run, and base BART. 
+Metrics are Text \sta{} (mean non-toxic probability from a RoBERTa classifier), \sta{} delta (rewrite \sta{} minus original \sta{}), BERTScore F1, and normalized CLIPScore. Higher is better for all metrics. BART-FT results are averaged across five seeds with different random initializations of the LoRA parameters, while LLaVA and DetoxLLM are single runs because of computational cost. The proxy is trained on the same five BART-FT seeds and evaluated on the same test set, so its mean and standard deviation reflect the underlying BART-FT variance rather than separate random seeds for the proxy itself.
 \begin{table}[t]
 \vskip -0.06in
 \centering
@@ -204,21 +210,16 @@ Proxy+BART & 0.884$\pm$0.015 & 0.128$\pm$0.015 & \best{0.581$\pm$0.020} & \best{
 \end{tabular}
 \caption{Test results on 280 memes. Rows with $\pm$ are seed 1--5
 mean$\pm$sample std; $^\ast$LLaVA is a fixed teacher target and
-$^\dagger$DetoxLLM is a single reported run. Text \sta{} is mean non-toxic
-probability from RoBERTa; \sta{} $\Delta$ is rewrite \sta{} minus original
-\sta{}; SIM is BERTScore F1; CLIP is normalized CLIPScore. Higher is better.}
+$^\dagger$DetoxLLM is a single reported run.}
 \label{tab:results}
-\vskip -0.12in
+\vskip 0.12in
 \end{table}
 
 Table~\ref{tab:results} shows that, across five BART seeds, all \bartft{}
 variants obtain higher mean Text \sta{} and \sta{} delta than the single
-reported DetoxLLM baseline. The full condition has the best average \bartft{}
+reported DetoxLLM baseline. The \texttt{full} condition has the best average \bartft{}
 detoxification, while \texttt{target\_only} is close and has the best BART-only
-SIM. The ablation is most visible in variance: \texttt{full} and
-\texttt{target\_only} are stable in SIM ($0.013$ standard deviation), whereas
-\texttt{visual\_only} has much larger SIM variance ($0.080$). Visual evidence
-alone is therefore not a reliable control signal for a text rewriter.
+SIM. The ablation study suggests that the conditioning is not crucial for detoxification.
 
 The external comparison and base-model ablation support the need for
 meme-specific fine-tuning. Base BART reaches high non-toxicity in the full
@@ -239,13 +240,14 @@ with 9.38 s for the LLaVA teacher and 1.99 s for DetoxLLM. The proxy
 evaluation took 3.4 minutes for 280 examples, about 0.73 s/image, roughly
 13$\times$ faster than LLaVA and 2.7$\times$ faster than DetoxLLM.
 
-\paragraph{Limitations.} The project depends on LLaVA pseudo-labels rather than
+\vspace{0.28em}
+\noindent\textbf{Limitations.} The project depends on LLaVA pseudo-labels rather than
 human detoxification references, and the heterogeneous source datasets remain
 noisy even after filtering. We do not include human evaluation; automatic
 toxicity, BERTScore, and CLIPScore may miss pragmatic harm, counterspeech,
 satire, or cases where lexical similarity preserves the harmful implication.
 The BART student without the proxy receives visual context only as teacher text
-fields, not pixels, and VisualBERT pass/fail was uninformative on this test set.
+fields, not pixels.
 Finally, the proxy is not yet a drop-in replacement: it preserves similarity and
 alignment, but its lower Text \sta{} requires stronger toxicity control.
 
@@ -260,6 +262,8 @@ evaluation relative to the single reported DetoxLLM-7B baseline. The CLIP Proxy
 inference and improves fidelity metrics, but future work must improve proxy
 toxicity control while preserving efficiency and image alignment.
 
+\renewcommand{\bibfont}{\footnotesize}
+\setlength{\bibsep}{1pt plus 0.3ex}
 \bibliographystyle{ieeetr}
 \bibliography{main}
 
