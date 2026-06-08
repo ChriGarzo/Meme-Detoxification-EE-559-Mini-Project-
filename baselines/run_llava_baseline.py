@@ -1,18 +1,23 @@
 """
 LLaVA baseline for hateful meme detoxification.
 
-Two rewriting modes:
+NOTE: This script is unmaintained and not part of the evaluation pipeline.
+The evaluation pipeline (scripts/run_evaluate_all_job.sh) does not invoke this
+file; the LLaVA teacher row in the results table is derived from the pre-computed
+target_text labels in the Stage 2 JSONL, not from re-running this script.
+
+This file has known API incompatibilities with the current MemeExplainer
+(models/explainer.py): the processor calling convention and the explanation
+field schema (target_group/visual_evidence/implicit_meaning) differ from what
+is hard-coded here. Do not run this script without first updating it to match
+the current MemeExplainer API.
+
+Two rewriting modes (concept only):
   end_to_end        — LLaVA receives (image, original text) and is prompted to
                       produce a non-hateful rewrite directly, without explicit
                       Stage 1 structured analysis.
   structured_prompt — Stage 1 MemeExplainer produces a structured explanation
-                      (description, visual evidence, offensive keywords, rationale)
-                      which is appended as context before asking LLaVA to rewrite;
-                      this mirrors the teacher pipeline but without a separate
-                      BART stage.
-
-Both modes serve as upper-bound ablations for the full two-stage pipeline,
-showing how much benefit the BART detoxification stage adds over LLaVA alone.
+                      which is appended as context before asking LLaVA to rewrite.
 """
 import argparse
 import json
@@ -28,7 +33,7 @@ from PIL import Image
 from codecarbon import EmissionsTracker
 
 from models.explainer import MemeExplainer
-from utils.debug import is_debug_mode, setup_debug_mode, DEBUG_CONFIG
+from utils.debug import is_debug_mode, DEBUG_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +68,7 @@ class LLaVABaseline:
         # MemeExplainer holds the loaded LLaVA model; we reuse it directly
         # to avoid loading the weights twice across both rewriting modes.
         self.explainer = MemeExplainer(
-            hf_cache=hf_cache,
+            cache_dir=hf_cache,
             load_in_4bit=load_in_4bit
         )
 
@@ -226,9 +231,6 @@ def main():
 
     args = parser.parse_args()
 
-    if args.debug:
-        setup_debug_mode()
-
     setup_logging(debug=args.debug)
     logger.info(f"Starting LLaVA baseline (mode={args.mode})")
 
@@ -240,14 +242,14 @@ def main():
     logger.info(f"Loaded {len(stage1_outputs)} Stage 1 outputs")
 
     if args.debug:
-        stage1_outputs = stage1_outputs[:DEBUG_CONFIG["max_examples"]]
+        stage1_outputs = stage1_outputs[:DEBUG_CONFIG["max_samples"]]
         logger.info(f"DEBUG mode: processing only {len(stage1_outputs)} examples")
 
     # Resolve image files; skip entries whose image cannot be found on disk.
     image_paths = []
     texts = []
     for item in stage1_outputs:
-        idx = item["idx"]
+        idx = item["id"]
         img_path = args.images_dir / f"{idx}.jpg"
         if not img_path.exists():
             img_path = args.images_dir / f"{idx}.png"
