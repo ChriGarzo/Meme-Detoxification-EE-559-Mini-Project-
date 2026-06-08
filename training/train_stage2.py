@@ -78,17 +78,29 @@ def format_input(
     task_prefix: str = "",
 ) -> str:
     """Build BART encoder input string for the given condition."""
-    tg = target_group    or "null"
-    ve = visual_evidence or "null"
-    im = implicit_meaning or "null"
+    raw_tg = target_group or "null"
+    raw_ve = visual_evidence or "null"
+    raw_im = implicit_meaning or "null"
 
     if condition == "full":
+        tg = raw_tg
+        ve = raw_ve
+        im = raw_im
         prefix = f"[T: {tg}] [V: {ve}] [M: {im}]"
     elif condition == "target_only":
+        tg = raw_tg
+        ve = "null"
+        im = "null"
         prefix = f"[T: {tg}] [V: null] [M: null]"
     elif condition == "visual_only":
+        tg = "null"
+        ve = raw_ve
+        im = "null"
         prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # "none"
+        tg = "null"
+        ve = "null"
+        im = "null"
         prefix = "[T: null] [V: null] [M: null]"
 
     if input_format == "explicit_detox":

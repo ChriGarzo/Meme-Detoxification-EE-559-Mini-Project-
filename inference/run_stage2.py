@@ -147,17 +147,29 @@ def build_condition_prompt(
     Null fields are rendered as the literal string "null" (not Python None).
     """
     explanation_str = explanation or {}
-    tg = explanation_str.get("target_group") or "null"
-    ve = explanation_str.get("visual_evidence") or "null"
-    im = explanation_str.get("implicit_meaning") or "null"
+    raw_tg = explanation_str.get("target_group") or "null"
+    raw_ve = explanation_str.get("visual_evidence") or "null"
+    raw_im = explanation_str.get("implicit_meaning") or "null"
 
     if condition == "full":
+        tg = raw_tg
+        ve = raw_ve
+        im = raw_im
         prefix = f"[T: {tg}] [V: {ve}] [M: {im}]"
     elif condition == "target_only":
+        tg = raw_tg
+        ve = "null"
+        im = "null"
         prefix = f"[T: {tg}] [V: null] [M: null]"
     elif condition == "visual_only":
+        tg = "null"
+        ve = raw_ve
+        im = "null"
         prefix = f"[T: null] [V: {ve}] [M: null]"
     else:  # 'none'
+        tg = "null"
+        ve = "null"
+        im = "null"
         prefix = "[T: null] [V: null] [M: null]"
 
     if input_format == "explicit_detox":

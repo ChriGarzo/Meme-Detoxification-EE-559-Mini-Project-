@@ -1,13 +1,14 @@
 # Fdb version 4
-["bibtex main"] 1780071999.26157 "main.aux" "main.bbl" "main" 1780071999.84889 0
-  "./main.bib" 1780071991.12719 4393 101483b441579cfa198c6eaa652c55be ""
+["bibtex main"] 1780905239.54579 "main.aux" "main.bbl" "main" 1780905240.16404 0
+  "./main.bib" 1780847290.34331 5334 be915b3ebfc64f12d6027919df6b7cea ""
   "/usr/local/texlive/2025/texmf-dist/bibtex/bst/base/ieeetr.bst" 1292289607 18361 1a00e58565e7f19bf2b3e1bfb82254ae ""
-  "main.aux" 1780071999.67789 1858 761923dcc26951a4880e9394cb16427c "pdflatex"
+  "main.aux" 1780905240.01147 2080 659a8b779e44ae48da9556f7a5f07c11 "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1780071999.32204 "main.tex" "main.pdf" "main" 1780071999.84899 0
+["pdflatex"] 1780905239.62054 "/Users/darioliuzzo/Desktop/MA2/Deep Learning/Meme-Detoxification-EE-559-Mini-Project-/paper/main.tex" "main.pdf" "main" 1780905240.16414 0
+  "/Users/darioliuzzo/Desktop/MA2/Deep Learning/Meme-Detoxification-EE-559-Mini-Project-/paper/main.tex" 1780905238.13479 14193 b3833128f5820bd91b19e9cff37b8c13 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2025/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/tfm/adobe/courier/pcrr7t.tfm" 1136768653 960 379cc0019370a9e0208a0a3f949f847a ""
@@ -36,10 +37,7 @@
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb" 1248133631 36299 5f9df58c2139e7edcf37c8fca4bd384d ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb" 1248133631 35752 024fb6c41858982481f6968b5fc26508 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb" 1248133631 32762 224316ccc9ad3ca0423a14971cfa7fc1 ""
-  "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb" 1248133631 33993 9b89b85fd2d9df0482bd47194d1d3bf3 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb" 1248133631 32569 5e5ddc8df908dea60932f3c484a54c0d ""
-  "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb" 1248133631 32915 7bf7720c61a5b3a7ff25b0964421c9b6 ""
-  "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb" 1248133631 32587 1788b0c1c5b39540c96f5e42ccd6dae8 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb" 1248133631 32716 08e384dc442464e7285e891af9f45947 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb" 1248133631 32442 c975af247b6702f7ca0c299af3616b80 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmbsy7.pfb" 1248133631 30068 eae4ba75635647d82fb0b7d7bccc4748 ""
@@ -117,10 +115,11 @@
   "/usr/local/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1758452008 5528033 2de1857e87beaf98978b63b6132a9b29 ""
   "/usr/local/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt" 1758451759 3621556 033afff8ef1f92847e00ead118fc6b70 ""
   "/usr/local/texlive/2025/texmf.cnf" 1741450484 577 418a7058ec8e006d8704f60ecd22c938 ""
-  "main.aux" 1780071999.67789 1858 761923dcc26951a4880e9394cb16427c "pdflatex"
-  "main.bbl" 1780071999.32029 3041 934c978ba5019de1937ccebfab9b5a1e "bibtex main"
-  "main.out" 1780071999.55531 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
-  "main.tex" 1780071985.26655 13979 992084eb866e08b90deb84bd02b37560 ""
+  "figures/inference.png" 1780847606.11096 107063 dd4893947ed4afb05b289baeb6968fae ""
+  "main.aux" 1780905240.01147 2080 659a8b779e44ae48da9556f7a5f07c11 "pdflatex"
+  "main.bbl" 1780905239.61873 3543 42fb0a86ec427a9e52001040af35dde6 "bibtex main"
+  "main.out" 1780905239.83503 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
+  "main.tex" 1780905238.13479 14193 b3833128f5820bd91b19e9cff37b8c13 ""
   "source/algorithm.sty" 1777443764 2223 ada3eaa0c1bd465a639433dfafc2fc4e ""
   "source/algorithmic.sty" 1777443764 7414 ce084815cf0aab483787dbc4bf2ace9c ""
   "source/fancyhdr.sty" 1777443764 20521 e5d13d98d57bd53d4fed3aa61bd29c86 ""

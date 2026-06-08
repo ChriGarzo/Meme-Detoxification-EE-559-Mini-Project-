@@ -14,14 +14,19 @@
 \citation{logacheva2022paradetox}
 \citation{khondaker2024detoxllm}
 \citation{liu2024llavanext}
+\citation{zhang2020bertscore}
+\citation{hessel2021clipscore}
+\citation{pramanick2021harmeme}
+\citation{fersini2022mami}
+\citation{gomez2020multimodal}
 \newlabel{sec:intro}{{1}{1}{}{section.1}{}}
 \newlabel{sec:related}{{2}{1}{}{section.2}{}}
 \citation{pramanick2021harmeme}
 \citation{fersini2022mami}
 \citation{gomez2020multimodal}
 \newlabel{sec:method}{{3}{2}{}{section.3}{}}
-\newlabel{tab:results}{{1}{2}{Test results on 280 memes. Rows with $\pm $ are seed 1--5 mean$\pm $sample std; $^\ast $LLaVA is a fixed teacher target and $^\dagger $DetoxLLM is a single reported run. Text \sta {} is mean non-toxic probability from RoBERTa; \sta {} $\Delta $ is rewrite \sta {} minus original \sta {}; SIM is BERTScore F1; CLIP is normalized CLIPScore. Higher is better}{table.1}{}}
 \newlabel{sec:ethics}{{4}{2}{}{section.4}{}}
+\newlabel{fig:inference}{{1}{2}{Efficient inference path. Frozen CLIP encodes image/text; a trained MLP predicts BART soft tokens for the fine-tuned decoder, avoiding LLaVA/DetoxLLM-sized inference}{figure.1}{}}
 \newlabel{sec:experiments}{{5}{2}{}{section.5}{}}
 \bibstyle{ieeetr}
 \bibdata{main}
@@ -33,9 +38,12 @@
 \bibcite{khondaker2024detoxllm}{{6}{}{{}}{{}}}
 \bibcite{radford2021learning}{{7}{}{{}}{{}}}
 \bibcite{logacheva2022paradetox}{{8}{}{{}}{{}}}
-\bibcite{pramanick2021harmeme}{{9}{}{{}}{{}}}
-\bibcite{fersini2022mami}{{10}{}{{}}{{}}}
-\bibcite{gomez2020multimodal}{{11}{}{{}}{{}}}
+\bibcite{zhang2020bertscore}{{9}{}{{}}{{}}}
+\bibcite{hessel2021clipscore}{{10}{}{{}}{{}}}
+\bibcite{pramanick2021harmeme}{{11}{}{{}}{{}}}
+\bibcite{fersini2022mami}{{12}{}{{}}{{}}}
+\bibcite{gomez2020multimodal}{{13}{}{{}}{{}}}
 \providecommand\NAT@force@numbers{}\NAT@force@numbers
+\newlabel{tab:results}{{1}{3}{Test results on 280 memes. SIM=BERTScore F1; CLIP=normalized CLIPScore. $\pm $ is mean$\pm $sample std over five BART seeds}{table.1}{}}
 \newlabel{sec:conclusion}{{6}{3}{}{section.6}{}}
 \gdef \@abspage@last{3}

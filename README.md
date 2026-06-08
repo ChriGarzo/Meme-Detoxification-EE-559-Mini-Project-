@@ -78,7 +78,8 @@ hateful_meme_rewriting/
 │
 ├── inference/
 │   ├── run_stage1_sharded.py            ← Stage 1: LLaVA explanations + rewrites (sharded)
-│   ├── merge_stage1_rewrites_shards.py  ← merge per-split shards into a single JSONL
+│   ├── merge_stage1_explanations_shards.py ← merge Stage 1 explanation shards
+│   ├── merge_stage1_rewrites_shards.py  ← merge Stage 1 pseudo-rewrite shards
 │   ├── run_stage2.py                    ← BART conditioned inference over the test set
 │   └── run_proxy_pipeline.py            ← CLIP Proxy + BART inference (no LLaVA at runtime)
 │
@@ -123,9 +124,9 @@ hateful_meme_rewriting/
 
 | Dataset | Access | Scope |
 |---|---|---|
-| HarMeme | `bash data/download_datasets.sh` (automatic) | ~3,500 COVID-19 / US-politics memes \[9\] |
-| MAMI | Manual request: https://forms.gle/AGWMiGicBHiQx4q98 | 10,000 misogynist memes \[10\] |
-| MMHS150K | https://gombru.github.io/2019/10/09/MMHS/ | ~150,000 Twitter image–text posts \[11\] |
+| HarMeme | `bash data/download_datasets.sh` (automatic) | ~3,500 COVID-19 / US-politics memes |
+| MAMI | Manual request: https://forms.gle/AGWMiGicBHiQx4q98 | 10,000 misogynist memes |
+| MMHS150K | https://gombru.github.io/2019/10/09/MMHS/ | ~150,000 Twitter image–text posts |
 
 ---
 
@@ -171,6 +172,30 @@ for i in 0 1; do
   SPLIT=test SHARD_ID=$i NUM_SHARDS=2 bash scripts/runai_stage1_sharded.sh
 done
 
+# Stage 1 post-processing — merge shards after all Stage 1 jobs finish.
+# Stage 1 writes shards to STAGE1_SHARD_DIR; Stage 2 reads merged files from STAGE1_MERGED_DIR.
+STAGE1_SHARD_DIR=/scratch/hmr_stage1_output
+STAGE1_MERGED_DIR=/scratch/stages/hmr_stage1_output
+mkdir -p "${STAGE1_MERGED_DIR}"
+python inference/merge_stage1_explanations_shards.py \
+  --dataset train --num_shards 8 \
+  --input_dir "${STAGE1_SHARD_DIR}" \
+  --output_path "${STAGE1_MERGED_DIR}/train_explanations_merged.jsonl"
+python inference/merge_stage1_rewrites_shards.py \
+  --dataset train --num_shards 8 \
+  --input_dir "${STAGE1_SHARD_DIR}" \
+  --output_path "${STAGE1_MERGED_DIR}/train_pseudo_rewrites_merged.jsonl"
+for split in val test; do
+  python inference/merge_stage1_explanations_shards.py \
+    --dataset "$split" --num_shards 2 \
+    --input_dir "${STAGE1_SHARD_DIR}" \
+    --output_path "${STAGE1_MERGED_DIR}/${split}_explanations_merged.jsonl"
+  python inference/merge_stage1_rewrites_shards.py \
+    --dataset "$split" --num_shards 2 \
+    --input_dir "${STAGE1_SHARD_DIR}" \
+    --output_path "${STAGE1_MERGED_DIR}/${split}_pseudo_rewrites_merged.jsonl"
+done
+
 # Build Stage 2 dataset (after all Stage 1 shards and merges finish)
 bash scripts/runai_build_stage2_dataset.sh
 
@@ -209,8 +234,6 @@ All systems evaluated on the same 280 held-out test memes. BART-FT results are m
 
 **Key findings.** All BART-FT conditions outperform DetoxLLM on Text STA and STA Δ, confirming the value of meme-specific LoRA fine-tuning over general-purpose text detoxification. Base BART achieves high non-toxicity (0.973) but negative SIM (−0.061), producing generic safe text unrelated to the source. DetoxLLM's relatively high SIM partly reflects copy behaviour — verbatim retention of toxic content inflates BERTScore without genuine rewriting.
 
-Among the conditioning ablations, `full` yields the strongest detoxification and `target_only` the best SIM. `visual_only` is the least stable (SIM std = 0.080), suggesting visual evidence alone is insufficient as a conditioning signal for text rewriting.
-
 The CLIP Proxy exposes a fidelity–detoxification trade-off: it achieves the best SIM (0.581) and CLIPScore (0.638), driven by stronger source retention and image alignment, but its Text STA drops to 0.884. Its main advantage is architectural — CLIP + small MLP + BART decoder, with no 7B VLM at inference.
 
 ---
@@ -236,18 +259,3 @@ To aggregate pipeline emissions a posteriori (no GPU needed):
 bash scripts/runai_pipeline_co2.sh
 ```
 
----
-
-## References
-
-\[1\] Kiela et al. (2020). The Hateful Memes Challenge. *NeurIPS*.  
-\[2\] Li et al. (2019). VisualBERT. *arXiv:1908.03557*.  
-\[3\] Liu et al. (2024). LLaVA-NeXT: Improved Reasoning, OCR, and World Knowledge. *LLaVA project blog*.  
-\[4\] Lewis et al. (2020). BART. *ACL*.  
-\[5\] Hu et al. (2022). LoRA: Low-Rank Adaptation of Large Language Models. *ICLR*.  
-\[6\] Khondaker et al. (2024). DetoxLLM: A Framework for Detoxification with Explanations. *EMNLP*.  
-\[7\] Radford et al. (2021). CLIP: Learning Transferable Visual Models from Natural Language Supervision. *ICML*.  
-\[8\] Logacheva et al. (2022). ParaDetox: Detoxification with Parallel Data. *ACL*.  
-\[9\] Pramanick et al. (2021). HarMeme: A Dataset for Hate Speech Detection in Memes. *EMNLP*.  
-\[10\] Fersini et al. (2022). SemEval-2022 Task 5: MAMI. *SemEval*.  
-\[11\] Gomez et al. (2020). Exploring Hate Speech Detection in Multimodal Publications. *CVPRW*.  

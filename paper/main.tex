@@ -138,10 +138,10 @@ most 0.95. The final supervised data contains
 on the meme pseudo-rewrite data.
 Encoder inputs contain the original text plus optional teacher fields in an
 explicit detoxification instruction. We train four conditions: \texttt{full},
-\texttt{target\_only}, \texttt{visual\_only}, and \texttt{none}. LoRA is applied
-to BART attention projections and feed-forward layers with rank 32, alpha 64, dropout 0.05,
-learning rate $10^{-4}$, batch size 8, warm-up 50 steps, weight decay 0.01, and
-5 epochs. About 17M of roughly 400M parameters are trainable.
+\texttt{target\_only}, \texttt{visual\_only}, and \texttt{none}. LoRA is applied with rank 32, alpha 64, and dropout 0.05.
+We fine-tune for 5 epochs with per-device batch size 8, learning rate
+$10^{-4}$, 50 warm-up steps, weight decay 0.01, input/target truncation length
+128, and generation length 64. About 17M of roughly 400M parameters are trainable.
 
 \textbf{CLIP Proxy + BART.} The proxy is a 3-layer MLP. It receives
 concatenated CLIP image and text embeddings (1536 dimensions) and predicts a

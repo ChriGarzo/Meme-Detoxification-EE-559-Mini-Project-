@@ -1,66 +1,42 @@
 \begin{thebibliography}{10}
 
 \bibitem{kiela2020hateful}
-D.~Kiela, H.~Firooz, A.~Mohan, V.~Goswami, A.~Singh, P.~Ringshia, and
-  D.~Testuggine, ``The hateful memes challenge: Detecting hate speech in
-  multimodal memes,'' in {\em Advances in Neural Information Processing
-  Systems}, 2020.
+D.~Kiela, H.~Firooz, A.~Mohan, V.~Goswami, A.~Singh, P.~Ringshia, and D.~Testuggine, ``The hateful memes challenge: Detecting hate speech in multimodal memes,'' in {\em Advances in Neural Information Processing Systems}, 2020.
 
 \bibitem{li2019visualbert}
-L.~H. Li, M.~Yatskar, D.~Yin, C.-J. Hsieh, and K.-W. Chang, ``Visualbert: A
-  simple and performant baseline for vision and language.'' arXiv preprint
-  arXiv:1908.03557, 2019.
+L.~H. Li, M.~Yatskar, D.~Yin, C.-J. Hsieh, and K.-W. Chang, ``Visualbert: A simple and performant baseline for vision and language.'' arXiv preprint arXiv:1908.03557, 2019.
 
 \bibitem{liu2024llavanext}
-H.~Liu, C.~Li, Y.~Li, B.~Li, Y.~Zhang, S.~Shen, and Y.~J. Lee, ``Llava-next:
-  Improved reasoning, ocr, and world knowledge.''
-  \href{https://llava-vl.github.io/blog/2024-01-30-llava-next/}{LLaVA project
-  blog}, January 2024.
+H.~Liu, C.~Li, Y.~Li, B.~Li, Y.~Zhang, S.~Shen, and Y.~J. Lee, ``Llava-next: Improved reasoning, ocr, and world knowledge.'' \href{https://llava-vl.github.io/blog/2024-01-30-llava-next/}{LLaVA project blog}, January 2024.
 
 \bibitem{lewis2020bart}
-M.~Lewis, Y.~Liu, N.~Goyal, M.~Ghazvininejad, A.~Mohamed, O.~Levy, V.~Stoyanov,
-  and L.~Zettlemoyer, ``{BART}: Denoising sequence-to-sequence pre-training for
-  natural language generation, translation, and comprehension,'' in {\em
-  Proceedings of the 58th Annual Meeting of the Association for Computational
-  Linguistics}, pp.~7871--7880, 2020.
+M.~Lewis, Y.~Liu, N.~Goyal, M.~Ghazvininejad, A.~Mohamed, O.~Levy, V.~Stoyanov, and L.~Zettlemoyer, ``{BART}: Denoising sequence-to-sequence pre-training for natural language generation, translation, and comprehension,'' in {\em Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics}, pp.~7871--7880, 2020.
 
 \bibitem{hu2022lora}
-E.~J. Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, and
-  W.~Chen, ``{LoRA}: Low-rank adaptation of large language models,'' in {\em
-  International Conference on Learning Representations}, 2022.
+E.~J. Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, and W.~Chen, ``{LoRA}: Low-rank adaptation of large language models,'' in {\em International Conference on Learning Representations}, 2022.
 
 \bibitem{khondaker2024detoxllm}
-M.~T.~I. Khondaker, M.~Abdul-Mageed, and L.~V.~S. Lakshmanan, ``{D}etox{LLM}: A
-  framework for detoxification with explanations,'' in {\em Proceedings of the
-  2024 Conference on Empirical Methods in Natural Language Processing},
-  pp.~19112--19139, 2024.
+M.~T.~I. Khondaker, M.~Abdul-Mageed, and L.~V.~S. Lakshmanan, ``{D}etox{LLM}: A framework for detoxification with explanations,'' in {\em Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing}, pp.~19112--19139, 2024.
 
 \bibitem{radford2021learning}
-A.~Radford, J.~W. Kim, C.~Hallacy, {\em et~al.}, ``Learning transferable visual
-  models from natural language supervision,'' in {\em Proceedings of the 38th
-  International Conference on Machine Learning}, 2021.
+A.~Radford, J.~W. Kim, C.~Hallacy, {\em et~al.}, ``Learning transferable visual models from natural language supervision,'' in {\em Proceedings of the 38th International Conference on Machine Learning}, 2021.
 
 \bibitem{logacheva2022paradetox}
-V.~Logacheva, D.~Dementieva, S.~Ustyantsev, D.~Moskovskiy, D.~Dale, I.~Krotova,
-  N.~Semenov, and A.~Panchenko, ``Paradetox: Detoxification with parallel
-  data,'' in {\em Proceedings of the 60th Annual Meeting of the Association for
-  Computational Linguistics}, 2022.
+V.~Logacheva, D.~Dementieva, S.~Ustyantsev, D.~Moskovskiy, D.~Dale, I.~Krotova, N.~Semenov, and A.~Panchenko, ``Paradetox: Detoxification with parallel data,'' in {\em Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics}, pp.~6804--6818, 2022.
+
+\bibitem{zhang2020bertscore}
+T.~Zhang, V.~Kishore, F.~Wu, K.~Q. Weinberger, and Y.~Artzi, ``{BERTScore}: Evaluating text generation with {BERT},'' in {\em International Conference on Learning Representations}, 2020.
+
+\bibitem{hessel2021clipscore}
+J.~Hessel, A.~Holtzman, M.~Forbes, R.~Le~Bras, and Y.~Choi, ``{CLIPScore}: A reference-free evaluation metric for image captioning,'' in {\em Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing}, pp.~7514--7528, 2021.
 
 \bibitem{pramanick2021harmeme}
-S.~Pramanick, S.~Sharma, D.~Dimitrov, M.~S. Akhtar, P.~Nakov, and
-  T.~Chakraborty, ``Harmeme: A dataset for hate speech detection in memes,'' in
-  {\em Proceedings of the 2021 Conference on Empirical Methods in Natural
-  Language Processing}, 2021.
+S.~Pramanick, S.~Sharma, D.~Dimitrov, M.~S. Akhtar, P.~Nakov, and T.~Chakraborty, ``{MOMENTA}: A multimodal framework for detecting harmful memes and their targets,'' in {\em Findings of the Association for Computational Linguistics: EMNLP 2021}, pp.~4439--4455, 2021.
 
 \bibitem{fersini2022mami}
-E.~Fersini, F.~Gasparini, G.~Rizzi, A.~Saibene, B.~Chulvi, P.~Rosso, A.~Lees,
-  and J.~Sorensen, ``Semeval-2022 task 5: Multimedia automatic misogyny
-  identification,'' in {\em Proceedings of the 16th International Workshop on
-  Semantic Evaluation}, 2022.
+E.~Fersini, F.~Gasparini, G.~Rizzi, A.~Saibene, B.~Chulvi, P.~Rosso, A.~Lees, and J.~Sorensen, ``Semeval-2022 task 5: Multimedia automatic misogyny identification,'' in {\em Proceedings of the 16th International Workshop on Semantic Evaluation}, pp.~533--549, 2022.
 
 \bibitem{gomez2020multimodal}
-R.~Gomez, J.~Gibert, L.~Gomez, and D.~Karatzas, ``Exploring hate speech
-  detection in multimodal publications,'' in {\em Proceedings of the IEEE/CVF
-  Winter Conference on Applications of Computer Vision Workshops}, 2020.
+R.~Gomez, J.~Gibert, L.~Gomez, and D.~Karatzas, ``Exploring hate speech detection in multimodal publications,'' in {\em Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision}, pp.~1470--1478, 2020.
 
 \end{thebibliography}
