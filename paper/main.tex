@@ -209,6 +209,7 @@ Model & Text \sta{} & \sta{} $\Delta$ & SIM & CLIP \\
 \midrule
 LLaVA teacher & \best{0.990} & \best{0.234} & 0.472 & 0.636 \\
 DetoxLLM-7B & 0.940 & 0.184 & 0.443 & 0.634 \\
+BART base & 0.973 & 0.217 & $-$0.061 & 0.622 \\
 \bartft{} full & 0.963$\pm$0.006 & 0.207$\pm$0.006 & 0.330$\pm$0.013 & 0.628$\pm$0.001 \\
 \bartft{} target & 0.960$\pm$0.005 & 0.204$\pm$0.005 & 0.335$\pm$0.013 & 0.629$\pm$0.002 \\
 \bartft{} visual & 0.960$\pm$0.004 & 0.204$\pm$0.004 & 0.284$\pm$0.080 & 0.624$\pm$0.007 \\
@@ -231,10 +232,8 @@ conditioning gives little measurable gain under these automatic toxicity
 metrics. The LLaVA teacher row is a pseudo-label reference, not an independent
 baseline.
 
-Base BART often generated generic, off-task safe text rather than meaningful rewrites, supporting the need for meme-specific fine-tuning. DetoxLLM keeps higher SIM than the BART-only students
-(0.443 vs. roughly 0.33), but copying can inflate BERTScore when toxic input is
-retained. Similarity must therefore be interpreted with Text \sta{} and \sta{}
-delta, not as a stand-alone quality score.
+Base BART achieves Text \sta{} of 0.973 but SIM of $-0.061$: without fine-tuning, the model
+produces generic safe text that loses coherence with the source. DetoxLLM's higher SIM (0.443) partly reflects copy behaviour, with toxic content retained verbatim inflates BERTScore, so SIM must be read jointly with Text \sta{} and \sta{} delta.
 
 The proxy obtains the best mean SIM (0.581) and CLIPScore (0.638), suggesting
 stronger source retention and image alignment, but Text \sta{} drops to 0.884.
