@@ -233,7 +233,7 @@ metrics. The LLaVA teacher row is a pseudo-label reference, not an independent
 baseline.
 
 Base BART achieves Text \sta{} of 0.973 but SIM of $-0.061$: without fine-tuning, the model
-produces generic safe text that loses coherence with the source. DetoxLLM's higher SIM (0.443) partly reflects copy behaviour, with toxic content retained verbatim inflates BERTScore, so SIM must be read jointly with Text \sta{} and \sta{} delta.
+produces generic safe text that loses coherence with the source. DetoxLLM's higher SIM (0.443) partly reflects copy behaviour: toxic content retained verbatim inflates BERTScore, so SIM must be read jointly with Text \sta{} and \sta{} delta.
 
 The proxy obtains the best mean SIM (0.581) and CLIPScore (0.638), suggesting
 stronger source retention and image alignment, but Text \sta{} drops to 0.884.

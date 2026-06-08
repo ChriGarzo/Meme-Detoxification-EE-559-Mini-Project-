@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (MiKTeX 24.1) (preloaded format=pdflatex 2026.6.8)  8 JUN 2026 12:34
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (MiKTeX 24.1) (preloaded format=pdflatex 2026.6.8)  8 JUN 2026 14:07
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -529,16 +529,16 @@ Underfull \hbox (badness 2359) in paragraph at lines 172--178
 Underfull \vbox (badness 10000) has occurred while \output is active []
 
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <9> on input line 221.
+(Font)              <9> on input line 222.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <6> on input line 221.
+(Font)              <6> on input line 222.
  [2
 pdfTeX warning (ext4): destination with the same identifier (name{figure.1}) ha
 s been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.234 B
-       ase BART often generated generic, off-task safe text rather than mean...
+l.235 B
+       ase BART achieves Text \sta{} of 0.973 but SIM of $-0.061$: without f...
  <./figures/inference.png>] (main.bbl
 Underfull \vbox (badness 10000) has occurred while \output is active []
 
@@ -557,7 +557,7 @@ pdfTeX warning (ext4): destination with the same identifier (name{table.1}) has
  been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.275 \end{document}
+l.274 \end{document}
                     ] (main.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
@@ -590,7 +590,7 @@ Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/urw/times/utmb8a.pfb>
 pfb><C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/urw/times/utm
 r8a.pfb><C:/Users/Christian/AppData/Local/Programs/MiKTeX/fonts/type1/urw/times
 /utmri8a.pfb>
-Output written on main.pdf (3 pages, 227119 bytes).
+Output written on main.pdf (3 pages, 227233 bytes).
 PDF statistics:
  133 PDF objects out of 1000 (max. 8388607)
  26 named destinations out of 1000 (max. 500000)
