@@ -213,6 +213,14 @@ bash scripts/runai_plot_curves.sh        # Stage 2 → hateful_meme_rewriting/tr
 bash scripts/runai_plot_proxy_curves.sh  # Stage 3 → hateful_meme_rewriting/training_plots/stage_3_training_plots/
 ```
 
+## Model Checkpoints
+
+Model weights are not stored inside this Git repository; RunAI jobs write them to the shared scratch volume under `/scratch/stages/`.
+The main BART student checkpoint is typically `/scratch/stages/hmr_stage2_full_checkpoint/`, with ablation checkpoints in `/scratch/stages/hmr_stage2_target_only_checkpoint/`, `/scratch/stages/hmr_stage2_visual_only_checkpoint/`, and `/scratch/stages/hmr_stage2_none_checkpoint/`.
+If the `explicit_detox` setting is used, the same directories are created with the `_explicit_detox` suffix.
+Each Stage 2 checkpoint directory contains the merged BART model plus `lora_adapter/` and `lora_adapter_final/`.
+The proxy model is typically stored in `/scratch/stages/hmr_proxy_checkpoint/`, with the main artifact at `/scratch/stages/hmr_proxy_checkpoint/best_proxy.pt`.
+
 ---
 
 ## Results
@@ -258,4 +266,3 @@ To aggregate pipeline emissions a posteriori (no GPU needed):
 ```bash
 bash scripts/runai_pipeline_co2.sh
 ```
-
