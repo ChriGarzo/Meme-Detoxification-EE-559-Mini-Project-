@@ -50,13 +50,13 @@ Evaluation — all systems on 280 held-out test memes
 
 **Models:**
 
-| Role | Model |
-|---|---|
-| Stage 1 teacher | `llava-hf/llava-v1.6-mistral-7b-hf` |
-| Stage 2 student | `facebook/bart-large` (LoRA fine-tuned) |
-| External baseline | `UBC-NLP/DetoxLLM-7B` |
-| Stage 0 filter + Stage 3 proxy | `openai/clip-vit-large-patch14` |
-| Text STA metric | `s-nlp/roberta_toxicity_classifier` |
+| Role | Model | Source |
+|---|---|---|
+| Stage 1 teacher | `llava-hf/llava-v1.6-mistral-7b-hf` | [Hugging Face](https://huggingface.co/llava-hf/llava-v1.6-mistral-7b-hf) |
+| Stage 2 student | `facebook/bart-large` (LoRA fine-tuned) | [Hugging Face](https://huggingface.co/facebook/bart-large) |
+| External baseline | `UBC-NLP/DetoxLLM-7B` | [Hugging Face](https://huggingface.co/UBC-NLP/DetoxLLM-7B) |
+| Stage 0 filter + Stage 3 proxy | `openai/clip-vit-large-patch14` | [Hugging Face](https://huggingface.co/openai/clip-vit-large-patch14) |
+| Text STA metric | `s-nlp/roberta_toxicity_classifier` | [Hugging Face](https://huggingface.co/s-nlp/roberta_toxicity_classifier) |
 
 ---
 
